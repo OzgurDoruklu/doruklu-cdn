@@ -25,12 +25,14 @@ const cookieStorage = {
     setItem: (key, value) => {
         const domain = getCookieDomain();
         const domainStr = domain ? `domain=${domain}; ` : '';
-        document.cookie = `${key}=${encodeURIComponent(value)}; ${domainStr}path=/; max-age=31536000; SameSite=Lax; Secure`;
+        const secureFlag = window.location.protocol === 'https:' ? 'Secure;' : '';
+        document.cookie = `${key}=${encodeURIComponent(value)}; ${domainStr}path=/; max-age=31536000; SameSite=Lax; ${secureFlag}`;
     },
     removeItem: (key) => {
         const domain = getCookieDomain();
         const domainStr = domain ? `domain=${domain}; ` : '';
-        document.cookie = `${key}=; ${domainStr}path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+        const secureFlag = window.location.protocol === 'https:' ? 'Secure;' : '';
+        document.cookie = `${key}=; ${domainStr}path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; ${secureFlag}`;
     }
 }
 
