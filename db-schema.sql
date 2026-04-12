@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     id            UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     role          TEXT DEFAULT 'player' CHECK (role IN ('super_admin', 'admin', 'player')),
     display_name  TEXT,
+    avatar_url    TEXT,
     total_score   INTEGER DEFAULT 0,
     permissions   JSONB DEFAULT '{}'::jsonb,  -- Uygulama bazlı izinler
     created_at    TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now())

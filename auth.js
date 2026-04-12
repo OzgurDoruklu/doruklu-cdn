@@ -38,11 +38,27 @@ export async function initSubdomainAuth(appKey, onSuccess) {
             .eq('id', user.id)
             .single();
 
-        if (error || !profile) {
-            AppState.profile = { role: 'player', permissions: {} };
-        } else {
-            AppState.profile = profile;
+        let currentProfile = profile || { role: 'player', permissions: {} };
+
+        // Google Metadata ile Senkronizasyon (İsim ve Avatar)
+        const meta = user.user_metadata;
+        const googleName = meta?.full_name || meta?.name;
+        const googleAvatar = meta?.avatar_url || meta?.picture;
+
+        if (profile && (googleName !== profile.display_name || googleAvatar !== profile.avatar_url)) {
+            const { data: updatedProfile } = await supabase
+                .from('profiles')
+                .update({ 
+                    display_name: googleName || profile.display_name,
+                    avatar_url: googleAvatar || profile.avatar_url
+                })
+                .eq('id', user.id)
+                .select()
+                .single();
+            if (updatedProfile) currentProfile = updatedProfile;
         }
+
+        AppState.profile = currentProfile;
 
         // Loading gizle
         if (spinner) spinner.style.display = 'none';
@@ -60,6 +76,7 @@ export async function initSubdomainAuth(appKey, onSuccess) {
 
         // Badge göster
         ui.renderUserBadge(user, AppState.profile, async () => {
+            await clearAllCaches();
             await supabase.auth.signOut();
             window.location.href = 'https://doruklu.com';
         });
@@ -164,4 +181,18 @@ function showAccessDenied(customMessage) {
             </div>
         </div>
     `;
+}
+
+/**
+ * Tüm oturum verilerini temizler (localStorage, sessionStorage ve Çerezler)
+ */
+export async function clearAllCaches() {
+    localStorage.clear();
+    sessionStorage.clear();
+    
+    // Bütün çerezleri her domain/path varyasyonu için yok et
+    document.cookie.split(";").forEach(function(c) { 
+        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/;domain=.doruklu.com");
+    });
 }
