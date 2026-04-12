@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-if (window.location.search.includes('reset_cache=true')) {
+if (window.location.search.includes('logout=true') || window.location.search.includes('reset_cache=true')) {
     localStorage.clear();
     sessionStorage.clear();
     
@@ -10,7 +10,10 @@ if (window.location.search.includes('reset_cache=true')) {
         document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/;domain=.doruklu.com");
     });
 
-    alert("Tüm Cache ve Cookie'ler başarıyla temizlendi! Şimdi sıfırdan başlıyorsunuz.");
+    if (window.location.search.includes('reset_cache=true')) {
+        alert("Tüm Cache ve Cookie'ler başarıyla temizlendi! Şimdi sıfırdan başlıyorsunuz.");
+    }
+    
     window.location.href = window.location.origin;
 }
 

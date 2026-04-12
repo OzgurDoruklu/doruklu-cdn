@@ -32,30 +32,42 @@ export async function initSubdomainAuth(appKey, onSuccess) {
         AppState.user = user;
 
         // Profil bilgisini çek
-        const { data: profile, error } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', user.id)
-            .single();
-
-        let currentProfile = profile || { role: 'player', permissions: {} };
-
-        // Google Metadata ile Senkronizasyon (İsim ve Avatar)
-        const meta = user.user_metadata;
-        const googleName = meta?.full_name || meta?.name;
-        const googleAvatar = meta?.avatar_url || meta?.picture;
-
-        if (profile && (googleName !== profile.display_name || googleAvatar !== profile.avatar_url)) {
-            const { data: updatedProfile } = await supabase
+        let currentProfile = { role: 'player', permissions: {} };
+        try {
+            const { data: profile, error } = await supabase
                 .from('profiles')
-                .update({ 
-                    display_name: googleName || profile.display_name,
-                    avatar_url: googleAvatar || profile.avatar_url
-                })
+                .select('*')
                 .eq('id', user.id)
-                .select()
                 .single();
-            if (updatedProfile) currentProfile = updatedProfile;
+
+            if (profile) {
+                currentProfile = profile;
+                
+                // Google Metadata ile Senkronizasyon (İsim ve Avatar)
+                const meta = user.user_metadata;
+                const googleName = meta?.full_name || meta?.name;
+                const googleAvatar = meta?.avatar_url || meta?.picture;
+
+                if (googleName !== profile.display_name || googleAvatar !== profile.avatar_url) {
+                    const { data: updatedProfile } = await supabase
+                        .from('profiles')
+                        .update({ 
+                            display_name: googleName || profile.display_name,
+                            avatar_url: googleAvatar || profile.avatar_url
+                        })
+                        .eq('id', user.id)
+                        .select()
+                        .single();
+                    if (updatedProfile) currentProfile = updatedProfile;
+                }
+            }
+        } catch (err) {
+            console.error("Profile fetch error (likely expired session):", err);
+            // Hata durumunda session'ı temizle ve login'e zorla
+            await clearAllCaches();
+            await supabase.auth.signOut();
+            redirectToLogin();
+            return;
         }
 
         AppState.profile = currentProfile;
@@ -78,7 +90,7 @@ export async function initSubdomainAuth(appKey, onSuccess) {
         ui.renderUserBadge(user, AppState.profile, async () => {
             await clearAllCaches();
             await supabase.auth.signOut();
-            window.location.href = 'https://doruklu.com';
+            window.location.href = 'https://doruklu.com/?logout=true';
         });
 
         // Başarı callback
