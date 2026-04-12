@@ -60,6 +60,25 @@ export async function initSubdomainAuth(appKey, onSuccess) {
                         .single();
                     if (updatedProfile) currentProfile = updatedProfile;
                 }
+            } else {
+                // PROFIL YOKSA OLUSTUR (Yeni Kullanıcı Fix)
+                const meta = user.user_metadata;
+                const googleName = meta?.full_name || meta?.name;
+                const googleAvatar = meta?.avatar_url || meta?.picture;
+
+                const { data: newProfile, error: insError } = await supabase
+                    .from('profiles')
+                    .insert({
+                        id: user.id,
+                        display_name: googleName || user.email.split('@')[0],
+                        avatar_url: googleAvatar,
+                        role: 'player',
+                        permissions: {}
+                    })
+                    .select()
+                    .single();
+                
+                if (newProfile) currentProfile = newProfile;
             }
         } catch (err) {
             console.error("Profile fetch error (likely expired session):", err);
@@ -158,7 +177,8 @@ export async function initSubdomainAuth(appKey, onSuccess) {
 }
 
 function redirectToLogin() {
-    if (window.location.hostname === 'doruklu.com' || window.location.hostname === 'www.doruklu.com') {
+    const isHub = window.location.hostname === 'doruklu.com' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isHub) {
         const authScreen = document.getElementById('auth-screen');
         if (authScreen) authScreen.style.display = 'flex';
         return;
