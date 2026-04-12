@@ -4,8 +4,8 @@
  * 
  * SSO Akışı:
  * 1. Subdomain session arar (localStorage)
- * 2. Yoksa → URL hash'te token var mı? (doruklu.com'dan relay)
- * 3. Hash token varsa → Supabase detectSessionInUrl ile otomatik alır, bekle
+ * 2. URL'de sso_token query param var mı? (doruklu.com'dan relay)
+ * 3. sso_token varsa → supabase.auth.setSession() ile manuel session kurar
  * 4. Hiçbiri yoksa → doruklu.com'a redirect (login için)
  */
 import { supabase, AppState } from './supabase-config.js';
@@ -14,9 +14,8 @@ import { ui } from './ui.js';
 /**
  * Subdomain uygulamaları için standart SSO auth akışı.
  * 
- * @param {string} appKey — Bu uygulamanın permissions anahtarı (ör: 'toprak_game', 'ozgur_dashboard', 'nurcan_app')
- *                          null ise yetki kontrolü yapılmaz
- * @param {Function} onSuccess — Başarılı login + yetki sonrası çağrılacak callback: (user, profile) => void
+ * @param {string} appKey — Bu uygulamanın permissions anahtarı
+ * @param {Function} onSuccess — Başarılı login + yetki sonrası callback: (user, profile) => void
  */
 export async function initSubdomainAuth(appKey, onSuccess) {
     const spinner = document.getElementById('loading-spinner');
@@ -31,11 +30,6 @@ export async function initSubdomainAuth(appKey, onSuccess) {
 
         const user = session.user;
         AppState.user = user;
-
-        // URL hash'i temizle (token relay sonrası)
-        if (window.location.hash.includes('access_token')) {
-            history.replaceState(null, '', window.location.pathname + window.location.search);
-        }
 
         // Profil bilgisini çek
         const { data: profile, error } = await supabase
@@ -53,7 +47,7 @@ export async function initSubdomainAuth(appKey, onSuccess) {
         // Loading gizle
         if (spinner) spinner.style.display = 'none';
 
-        // Yetki kontrolü (appKey varsa)
+        // Yetki kontrolü
         if (appKey) {
             const perms = AppState.profile.permissions || {};
             const hasAccess = AppState.profile.role === 'super_admin' || perms[appKey] === true;
@@ -76,33 +70,71 @@ export async function initSubdomainAuth(appKey, onSuccess) {
         }
     }
 
-    // Auth state listener — hash token relay'i de yakalar
-    supabase.auth.onAuthStateChange(async (event, session) => {
-        if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
-            await handleSession(session);
-        }
-    });
+    // ADIM 1: URL'de SSO token var mı? (doruklu.com'dan relay)
+    const urlParams = new URLSearchParams(window.location.search);
+    const ssoToken = urlParams.get('sso_token');
+    const ssoRefresh = urlParams.get('sso_refresh');
 
-    // Mevcut session kontrol (localStorage'da varsa)
+    if (ssoToken && ssoRefresh) {
+        // URL'i temizle (tokenları adres çubuğundan kaldır)
+        const cleanUrl = window.location.origin + window.location.pathname;
+        history.replaceState(null, '', cleanUrl);
+
+        // Manuel session kurulumu — en güvenilir yöntem
+        const { data, error } = await supabase.auth.setSession({
+            access_token: ssoToken,
+            refresh_token: ssoRefresh
+        });
+
+        if (data?.session) {
+            await handleSession(data.session);
+            return;
+        }
+
+        // setSession başarısız olduysa, login'e yönlendir
+        if (spinner) spinner.style.display = 'none';
+        showAccessDenied('Oturum doğrulanamadı. Lütfen tekrar giriş yapın.');
+        return;
+    }
+
+    // ADIM 2: localStorage'da mevcut session var mı?
     const { data: { session } } = await supabase.auth.getSession();
 
     if (session) {
         await handleSession(session);
-    } else if (window.location.hash.includes('access_token')) {
-        // Hash'te token var — Supabase detectSessionInUrl ile işleyecek
-        // onAuthStateChange(SIGNED_IN) tetiklenecek, bekle
+        return;
+    }
+
+    // ADIM 3: Hash'te token var mı? (eski yöntem fallback)
+    if (window.location.hash.includes('access_token')) {
+        // onAuthStateChange ile yakala
+        supabase.auth.onAuthStateChange(async (event, session) => {
+            if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
+                await handleSession(session);
+            }
+        });
+
         setTimeout(() => {
             if (!_handled) {
-                // 8 saniye geçti, hâlâ işlenmedi — hash parse başarısız
                 if (spinner) spinner.style.display = 'none';
-                showAccessDenied('Oturum doğrulanamadı. Lütfen tekrar giriş yapın.');
+                redirectToLogin();
             }
-        }, 8000);
-    } else {
-        // Session yok, hash yok → ana sayfaya yönlendir
-        if (spinner) spinner.style.display = 'none';
-        window.location.href = 'https://doruklu.com/?redirect_to=' + encodeURIComponent(window.location.href);
+        }, 5000);
+        return;
     }
+
+    // ADIM 4: Hiçbir session yok → login'e yönlendir
+    if (spinner) spinner.style.display = 'none';
+    redirectToLogin();
+}
+
+function redirectToLogin() {
+    if (window.location.hostname === 'doruklu.com' || window.location.hostname === 'www.doruklu.com') {
+        const authScreen = document.getElementById('auth-screen');
+        if (authScreen) authScreen.style.display = 'flex';
+        return;
+    }
+    window.location.href = 'https://doruklu.com/?redirect_to=' + encodeURIComponent(window.location.origin + window.location.pathname);
 }
 
 function showAccessDenied(customMessage) {
