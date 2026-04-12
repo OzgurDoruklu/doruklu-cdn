@@ -1,6 +1,12 @@
 /**
  * Doruklu CDN — Merkezi Auth Modülü
  * Tüm subdomain'ler bu modülü kullanarak SSO akışını standartlaştırır.
+ * 
+ * SSO Akışı:
+ * 1. Subdomain session arar (localStorage)
+ * 2. Yoksa → URL hash'te token var mı? (doruklu.com'dan relay)
+ * 3. Hash token varsa → Supabase detectSessionInUrl ile otomatik alır, bekle
+ * 4. Hiçbiri yoksa → doruklu.com'a redirect (login için)
  */
 import { supabase, AppState } from './supabase-config.js';
 import { ui } from './ui.js';
@@ -9,11 +15,10 @@ import { ui } from './ui.js';
  * Subdomain uygulamaları için standart SSO auth akışı.
  * 
  * @param {string} appKey — Bu uygulamanın permissions anahtarı (ör: 'toprak_game', 'ozgur_dashboard', 'nurcan_app')
- *                          null ise yetki kontrolü yapılmaz (doruklu-main gibi)
+ *                          null ise yetki kontrolü yapılmaz
  * @param {Function} onSuccess — Başarılı login + yetki sonrası çağrılacak callback: (user, profile) => void
  */
 export async function initSubdomainAuth(appKey, onSuccess) {
-    // Loading göster
     const spinner = document.getElementById('loading-spinner');
     if (spinner) spinner.style.display = 'flex';
 
@@ -27,6 +32,11 @@ export async function initSubdomainAuth(appKey, onSuccess) {
         const user = session.user;
         AppState.user = user;
 
+        // URL hash'i temizle (token relay sonrası)
+        if (window.location.hash.includes('access_token')) {
+            history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+
         // Profil bilgisini çek
         const { data: profile, error } = await supabase
             .from('profiles')
@@ -35,7 +45,6 @@ export async function initSubdomainAuth(appKey, onSuccess) {
             .single();
 
         if (error || !profile) {
-            // Profil yoksa varsayılan oluştur
             AppState.profile = { role: 'player', permissions: {} };
         } else {
             AppState.profile = profile;
@@ -67,52 +76,36 @@ export async function initSubdomainAuth(appKey, onSuccess) {
         }
     }
 
-    // Auth state listener
+    // Auth state listener — hash token relay'i de yakalar
     supabase.auth.onAuthStateChange(async (event, session) => {
         if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
             await handleSession(session);
         }
     });
 
-    // Mevcut session kontrol
+    // Mevcut session kontrol (localStorage'da varsa)
     const { data: { session } } = await supabase.auth.getSession();
 
     if (session) {
         await handleSession(session);
+    } else if (window.location.hash.includes('access_token')) {
+        // Hash'te token var — Supabase detectSessionInUrl ile işleyecek
+        // onAuthStateChange(SIGNED_IN) tetiklenecek, bekle
+        setTimeout(() => {
+            if (!_handled) {
+                // 8 saniye geçti, hâlâ işlenmedi — hash parse başarısız
+                if (spinner) spinner.style.display = 'none';
+                showAccessDenied('Oturum doğrulanamadı. Lütfen tekrar giriş yapın.');
+            }
+        }, 8000);
     } else {
-        // Hash'te access_token varsa onAuthStateChange bekle
-        if (window.location.hash.includes('access_token')) {
-            // onAuthStateChange tetiklenecek, bekle
-            setTimeout(() => {
-                if (!_handled) {
-                    // 5 saniye içinde hâlâ işlenmediyse login sayfasına yönlendir
-                    redirectToLogin();
-                }
-            }, 5000);
-        } else {
-            // Session yok, ana sayfaya yönlendir
-            redirectToLogin();
-        }
+        // Session yok, hash yok → ana sayfaya yönlendir
+        if (spinner) spinner.style.display = 'none';
+        window.location.href = 'https://doruklu.com/?redirect_to=' + encodeURIComponent(window.location.href);
     }
 }
 
-function redirectToLogin() {
-    // Loading kaldır
-    const spinner = document.getElementById('loading-spinner');
-    if (spinner) spinner.style.display = 'none';
-
-    // Eğer zaten doruklu.com'daysak login ekranı göster
-    if (window.location.hostname === 'doruklu.com' || window.location.hostname === 'www.doruklu.com') {
-        const authScreen = document.getElementById('auth-screen');
-        if (authScreen) authScreen.style.display = 'flex';
-        return;
-    }
-
-    // Subdomain ise ana sayfaya redirect
-    window.location.href = 'https://doruklu.com/?redirect_to=' + encodeURIComponent(window.location.href);
-}
-
-function showAccessDenied() {
+function showAccessDenied(customMessage) {
     document.body.innerHTML = `
         <div style="
             color: white; text-align: center; padding: 80px 20px; 
@@ -129,8 +122,7 @@ function showAccessDenied() {
                 <div style="font-size: 3rem; margin-bottom: 1rem;">🔒</div>
                 <h2 style="color: #f87171; margin-top: 0;">Erişim Reddedildi</h2>
                 <p style="color: #c7d2fe; line-height: 1.6;">
-                    Bu uygulamaya erişim yetkiniz bulunmuyor.<br>
-                    Yöneticiden yetki talep edebilirsiniz.
+                    ${customMessage || 'Bu uygulamaya erişim yetkiniz bulunmuyor.<br>Yöneticiden yetki talep edebilirsiniz.'}
                 </p>
                 <a href="https://doruklu.com" style="
                     display: inline-block; margin-top: 1.5rem; padding: 0.8rem 2rem;
