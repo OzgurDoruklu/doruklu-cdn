@@ -61,38 +61,54 @@ export async function initSubdomainAuth(appKey, onSuccess) {
                 const googleName = meta?.full_name || meta?.name;
                 const googleAvatar = meta?.avatar_url || meta?.picture;
 
-                if (googleName !== profile.display_name || googleAvatar !== profile.avatar_url) {
-                    const { data: updatedProfile } = await supabase
+                if (googleName !== profile.display_name || googleAvatar !== profile.avatar_url || !profile.email) {
+                    const updatePayload = { 
+                        display_name: googleName || profile.display_name,
+                        email: user.email,
+                        avatar_url: googleAvatar || profile.avatar_url
+                    };
+                    let { data: updatedProfile, error: updError } = await supabase
                         .from('profiles')
-                        .update({ 
-                            display_name: googleName || profile.display_name,
-                            email: user.email,
-                            avatar_url: googleAvatar || profile.avatar_url
-                        })
+                        .update(updatePayload)
                         .eq('id', user.id)
                         .select()
                         .single();
+
+                    if (updError) {
+                        console.warn("[CDN] Profile update with email failed, retrying without email...");
+                        delete updatePayload.email;
+                        const { data: retryUpdP } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
+                        updatedProfile = retryUpdP;
+                    }
                     if (updatedProfile) currentProfile = updatedProfile;
                 }
-            } else {
                 // PROFIL YOKSA OLUSTUR (Yeni Kullanıcı Fix)
                 const meta = user.user_metadata;
                 const googleName = meta?.full_name || meta?.name;
                 const googleAvatar = meta?.avatar_url || meta?.picture;
 
-                const { data: newProfile, error: insError } = await supabase
+                const payload = {
+                    id: user.id,
+                    display_name: googleName || user.email.split('@')[0],
+                    email: user.email,
+                    avatar_url: googleAvatar,
+                    role: 'player',
+                    permissions: {}
+                };
+
+                let { data: newProfile, error: insError } = await supabase
                     .from('profiles')
-                    .insert({
-                        id: user.id,
-                        display_name: googleName || user.email.split('@')[0],
-                        email: user.email,
-                        avatar_url: googleAvatar,
-                        role: 'player',
-                        permissions: {}
-                    })
+                    .insert(payload)
                     .select()
                     .single();
                 
+                if (insError) {
+                    console.warn("[CDN] Profile sync with email failed, retrying without email...");
+                    delete payload.email;
+                    const { data: retryP } = await supabase.from('profiles').insert(payload).select().single();
+                    newProfile = retryP;
+                }
+
                 if (newProfile) currentProfile = newProfile;
             }
         } catch (err) {
