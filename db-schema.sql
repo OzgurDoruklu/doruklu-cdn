@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     id            UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     role          TEXT DEFAULT 'player' CHECK (role IN ('super_admin', 'admin', 'player')),
     display_name  TEXT,
+    email         TEXT,
     avatar_url    TEXT,
     total_score   INTEGER DEFAULT 0,
     permissions   JSONB DEFAULT '{}'::jsonb,  -- Uygulama bazlı izinler
@@ -31,26 +32,26 @@ CREATE POLICY "Herkes kendi profilini görebilir" ON public.profiles
 CREATE POLICY "Kullanıcılar kendi profilini oluşturabilir" ON public.profiles
     FOR INSERT WITH CHECK (auth.uid() = id);
 
--- Yönetici erişim politikası (REKÜRSİYON DÜZELTMESİ)
+-- Yönetici erişim politikası (REKÜRSİYON DÜZELTMESİ - SECURITY DEFINER ile)
+CREATE OR REPLACE FUNCTION public.get_auth_role()
+RETURNS text
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT role FROM profiles WHERE id = auth.uid();
+$$;
+
 CREATE POLICY "Yöneticiler tüm profilleri görebilir" ON public.profiles
     FOR SELECT USING (
-        EXISTS (
-            SELECT 1 FROM profiles 
-            WHERE id = auth.uid() 
-            AND role IN ('admin', 'super_admin')
-        )
+        public.get_auth_role() IN ('admin', 'super_admin')
     );
 
 -- Yöneticiler profil güncelleyebilir (yetki yönetimi)
 CREATE POLICY "Yöneticiler profilleri güncelleyebilir" ON public.profiles
     FOR UPDATE USING (
-        EXISTS (
-            SELECT 1 FROM profiles 
-            WHERE id = auth.uid() 
-            AND role IN ('admin', 'super_admin')
-        )
+        public.get_auth_role() IN ('admin', 'super_admin')
     );
-
 
 -- =====================
 -- TABLE: flashcards

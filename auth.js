@@ -66,6 +66,7 @@ export async function initSubdomainAuth(appKey, onSuccess) {
                         .from('profiles')
                         .update({ 
                             display_name: googleName || profile.display_name,
+                            email: user.email,
                             avatar_url: googleAvatar || profile.avatar_url
                         })
                         .eq('id', user.id)
@@ -84,6 +85,7 @@ export async function initSubdomainAuth(appKey, onSuccess) {
                     .insert({
                         id: user.id,
                         display_name: googleName || user.email.split('@')[0],
+                        email: user.email,
                         avatar_url: googleAvatar,
                         role: 'player',
                         permissions: {}
