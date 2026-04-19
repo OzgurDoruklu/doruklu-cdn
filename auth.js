@@ -152,11 +152,17 @@ async function syncProfileData(user) {
             display_name: googleName || profile.display_name,
             avatar_url: googleAvatar || profile.avatar_url
         };
-        const { data: updatedP, error } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
-        if (error) { // Email sütunu yoksa fallback
+        const { data: updatedP, error: err1 } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
+        if (err1) { 
+            console.warn("[Auth] Email ile güncelleme başarısız, email'siz deneniyor...");
             delete updatePayload.email;
-            const { data: fallbackUP } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
-            return fallbackUP;
+            const { data: updatedP2, error: err2 } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
+            
+            if (err2) {
+                console.warn("[Auth] Profil senkronize edilemedi (Muhtemelen RLS yetki hatası), mevcut verilerle devam ediliyor:", err2.message);
+                return profile; // Hata durumunda eldeki mevcut profili koru!
+            }
+            return updatedP2;
         }
         return updatedP;
     }

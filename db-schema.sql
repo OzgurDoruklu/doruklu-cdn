@@ -32,6 +32,10 @@ CREATE POLICY "Herkes kendi profilini görebilir" ON public.profiles
 CREATE POLICY "Kullanıcılar kendi profilini oluşturabilir" ON public.profiles
     FOR INSERT WITH CHECK (auth.uid() = id);
 
+-- Kullanıcıların kendi profilini güncelleyebilmesine izin ver (YENİ)
+CREATE POLICY "Kullanıcılar kendi profilini güncelleyebilir" ON public.profiles
+    FOR UPDATE USING (auth.uid() = id);
+
 -- Yönetici erişim politikası (REKÜRSİYON DÜZELTMESİ - SECURITY DEFINER ile)
 CREATE OR REPLACE FUNCTION public.get_auth_role()
 RETURNS text
