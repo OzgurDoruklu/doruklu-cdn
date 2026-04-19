@@ -15,6 +15,15 @@ import { ui } from './ui.js';
 export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess = null } = {}) {
     // 0. Versiyon Kontrolü (Cache Busting)
     const storedVersion = localStorage.getItem('DORUKLU_PLATFORM_VERSION');
+    // ... rest of the logic ... (Veritabanı işlemleri bittikten sonra buraya bakılacak)
+
+    // Redirect parametresini yakala (Sadece Hub'da)
+    const urlParams = new URLSearchParams(window.location.search);
+    const redirectTo = urlParams.get('redirect_to');
+    if (isHub && redirectTo) {
+        localStorage.setItem('redirect_to', redirectTo);
+    }
+
     if (storedVersion !== PLATFORM_VERSION) {
         console.log(`[Platform] Yeni versiyon tespit edildi (${storedVersion} -> ${PLATFORM_VERSION}). Önbellek temizleniyor...`);
         localStorage.clear();
@@ -46,9 +55,25 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
         let profile = await syncProfileData(user);
         AppState.profile = profile;
 
+        // 2. TOKEN RELAY (Hub -> Subdomain Geçişi)
+        if (isHub) {
+            const storedRedirect = localStorage.getItem('redirect_to');
+            if (storedRedirect) {
+                localStorage.removeItem('redirect_to');
+                // Token'ları URL'e ekleyip subdomain'e fırlat
+                if (session && session.access_token) {
+                    const url = new URL(storedRedirect);
+                    url.searchParams.set('sso_token', session.access_token);
+                    url.searchParams.set('sso_refresh', session.refresh_token);
+                    window.location.href = url.toString();
+                    return; // Relayed!
+                }
+            }
+        }
+
         if (spinner) spinner.style.display = 'none';
 
-        // 2. Yetki Kontrolü (Subdomainler için)
+        // 3. Yetki Kontrolü (Subdomainler için)
         if (!isHub && appKey) {
             const perms = AppState.profile.permissions || {};
             const hasAccess = AppState.profile.role === 'super_admin' || perms[appKey] === true;
