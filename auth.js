@@ -1,25 +1,19 @@
 /**
- * Doruklu CDN — Merkezi Auth Modülü
- * Tüm subdomain'ler bu modülü kullanarak SSO akışını standartlaştırır.
- * 
- * SSO Akışı:
- * 1. Subdomain session arar (localStorage)
- * 2. URL'de sso_token query param var mı? (doruklu.com'dan relay)
- * 3. sso_token varsa → supabase.auth.setSession() ile manuel session kurar
- * 4. Hiçbiri yoksa → doruklu.com'a redirect (login için)
+ * Doruklu CDN — Merkezi Auth Modülü (v2.0.0 — Unified)
+ * Tüm platformun (Hub + Subdomainler) SSO ve Profil yönetim kalbi.
  */
 import { supabase, AppState, PLATFORM_VERSION } from './supabase-config.js';
 import { ui } from './ui.js';
 
-
 /**
- * Subdomain uygulamaları için standart SSO auth akışı.
- * 
- * @param {string} appKey — Bu uygulamanın permissions anahtarı
- * @param {Function} onSuccess — Başarılı login + yetki sonrası callback: (user, profile) => void
+ * Merkezi Platform Auth Başlatıcı
+ * @param {Object} options 
+ * @param {boolean} options.isHub - Ana portal (doruklu.com) mu?
+ * @param {string} options.appKey - Subdomain için yetki anahtarı (örn: 'toprak_game')
+ * @param {Function} options.onSuccess - Başarılı giriş ve yetki sonrası callback: (user, profile) => void
  */
-export async function initSubdomainAuth(appKey, onSuccess) {
-    // 0. Otomatik Versiyon Kontrolü (Cache Busting)
+export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess = null } = {}) {
+    // 0. Versiyon Kontrolü (Cache Busting)
     const storedVersion = localStorage.getItem('DORUKLU_PLATFORM_VERSION');
     if (storedVersion !== PLATFORM_VERSION) {
         console.log(`[Platform] Yeni versiyon tespit edildi (${storedVersion} -> ${PLATFORM_VERSION}). Önbellek temizleniyor...`);
@@ -30,12 +24,16 @@ export async function initSubdomainAuth(appKey, onSuccess) {
         return;
     }
 
-    const spinner = document.getElementById('loading-spinner');
+    // Google Login butonu varsa otomatik bağla
+    const googleBtn = document.getElementById('google-btn');
+    if (googleBtn) googleBtn.onclick = handleGoogleLogin;
 
+    const spinner = document.getElementById('loading-spinner');
     if (spinner) spinner.style.display = 'flex';
 
     let _handled = false;
 
+    // Ana session işleme mantığı
     async function handleSession(session) {
         if (_handled) return;
         if (!session) return;
@@ -44,218 +42,159 @@ export async function initSubdomainAuth(appKey, onSuccess) {
         const user = session.user;
         AppState.user = user;
 
-        // Profil bilgisini çek
-        let currentProfile = { role: 'player', permissions: {} };
-        try {
-            const { data: profile, error } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', user.id)
-                .single();
+        // 1. Profil Senkronizasyonu (Source of Truth)
+        let profile = await syncProfileData(user);
+        AppState.profile = profile;
 
-            if (profile) {
-                currentProfile = profile;
-                
-                // Google Metadata ile Senkronizasyon (İsim ve Avatar)
-                const meta = user.user_metadata;
-                const googleName = meta?.full_name || meta?.name;
-                const googleAvatar = meta?.avatar_url || meta?.picture;
-
-                if (googleName !== profile.display_name || googleAvatar !== profile.avatar_url || !profile.email) {
-                    const updatePayload = { 
-                        display_name: googleName || profile.display_name,
-                        email: user.email,
-                        avatar_url: googleAvatar || profile.avatar_url
-                    };
-                    let { data: updatedProfile, error: updError } = await supabase
-                        .from('profiles')
-                        .update(updatePayload)
-                        .eq('id', user.id)
-                        .select()
-                        .single();
-
-                    if (updError) {
-                        console.warn("[CDN] Profile update with email failed, retrying without email...");
-                        delete updatePayload.email;
-                        const { data: retryUpdP } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
-                        updatedProfile = retryUpdP;
-                    }
-                    if (updatedProfile) currentProfile = updatedProfile;
-                }
-                // PROFIL YOKSA OLUSTUR (Yeni Kullanıcı Fix)
-                const meta = user.user_metadata;
-                const googleName = meta?.full_name || meta?.name;
-                const googleAvatar = meta?.avatar_url || meta?.picture;
-
-                const payload = {
-                    id: user.id,
-                    display_name: googleName || user.email.split('@')[0],
-                    email: user.email,
-                    avatar_url: googleAvatar,
-                    role: 'player',
-                    permissions: {}
-                };
-
-                let { data: newProfile, error: insError } = await supabase
-                    .from('profiles')
-                    .insert(payload)
-                    .select()
-                    .single();
-                
-                if (insError) {
-                    console.warn("[CDN] Profile sync with email failed, retrying without email...");
-                    delete payload.email;
-                    const { data: retryP } = await supabase.from('profiles').insert(payload).select().single();
-                    newProfile = retryP;
-                }
-
-                if (newProfile) currentProfile = newProfile;
-            }
-        } catch (err) {
-            console.error("Profile fetch error (likely expired session):", err);
-            // Hata durumunda session'ı temizle ve login'e zorla
-            await clearAllCaches();
-            await supabase.auth.signOut();
-            redirectToLogin();
-            return;
-        }
-
-        AppState.profile = currentProfile;
-
-        // Loading gizle
         if (spinner) spinner.style.display = 'none';
 
-        // Yetki kontrolü
-        if (appKey) {
+        // 2. Yetki Kontrolü (Subdomainler için)
+        if (!isHub && appKey) {
             const perms = AppState.profile.permissions || {};
             const hasAccess = AppState.profile.role === 'super_admin' || perms[appKey] === true;
-
             if (!hasAccess) {
                 showAccessDenied();
                 return;
             }
         }
 
-        // Badge göster
+        // 3. Ortak UI Render (Global Badge)
         ui.renderUserBadge(user, AppState.profile, async () => {
             await clearAllCaches();
             await supabase.auth.signOut();
             window.location.href = 'https://doruklu.com/?logout=true';
         });
 
-        // Başarı callback
-        if (onSuccess) {
-            onSuccess(user, AppState.profile);
-        }
+        // 4. Başarı Callback
+        if (onSuccess) onSuccess(user, AppState.profile);
     }
 
-    // ADIM 1: URL'de SSO token var mı? (doruklu.com'dan relay)
+    // SSO Token Yakalama (Query Param - Hem Hub hem Subdomain için aktif)
     const urlParams = new URLSearchParams(window.location.search);
     const ssoToken = urlParams.get('sso_token');
     const ssoRefresh = urlParams.get('sso_refresh');
 
     if (ssoToken && ssoRefresh) {
-        // URL'i temizle (tokenları adres çubuğundan kaldır)
-        const cleanUrl = window.location.origin + window.location.pathname;
-        history.replaceState(null, '', cleanUrl);
-
-        // Manuel session kurulumu — en güvenilir yöntem
+        history.replaceState(null, '', window.location.origin + window.location.pathname);
         const { data, error } = await supabase.auth.setSession({
             access_token: ssoToken,
             refresh_token: ssoRefresh
         });
-
         if (data?.session) {
             await handleSession(data.session);
             return;
         }
-
-        // setSession başarısız olduysa, login'e yönlendir
-        if (spinner) spinner.style.display = 'none';
-        showAccessDenied('Oturum doğrulanamadı. Lütfen tekrar giriş yapın.');
-        return;
     }
 
-    // ADIM 2: localStorage'da mevcut session var mı?
+    // Mevcut Session Kontrolü
     const { data: { session } } = await supabase.auth.getSession();
-
     if (session) {
         await handleSession(session);
-        return;
+    } else {
+        if (spinner) spinner.style.display = 'none';
+        if (isHub) {
+            // Hub ise auth ekranına düş
+            const authScreen = document.getElementById('auth-screen');
+            if (authScreen) authScreen.style.display = 'flex';
+        } else {
+            // Subdomain ise Hub'a yönlendir
+            redirectToLogin();
+        }
     }
-
-    // ADIM 3: Hash'te token var mı? (eski yöntem fallback)
-    if (window.location.hash.includes('access_token')) {
-        // onAuthStateChange ile yakala
-        supabase.auth.onAuthStateChange(async (event, session) => {
-            if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
-                await handleSession(session);
-            }
-        });
-
-        setTimeout(() => {
-            if (!_handled) {
-                if (spinner) spinner.style.display = 'none';
-                redirectToLogin();
-            }
-        }, 5000);
-        return;
-    }
-
-    // ADIM 4: Hiçbir session yok → login'e yönlendir
-    if (spinner) spinner.style.display = 'none';
-    redirectToLogin();
-}
-
-function redirectToLogin() {
-    const isHub = window.location.hostname === 'doruklu.com' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    if (isHub) {
-        const authScreen = document.getElementById('auth-screen');
-        if (authScreen) authScreen.style.display = 'flex';
-        return;
-    }
-    window.location.href = 'https://doruklu.com/?redirect_to=' + encodeURIComponent(window.location.origin + window.location.pathname);
-}
-
-function showAccessDenied(customMessage) {
-    document.body.innerHTML = `
-        <div style="
-            color: white; text-align: center; padding: 80px 20px; 
-            font-family: 'Outfit', sans-serif; min-height: 100vh;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
-        ">
-            <div style="
-                background: rgba(255,255,255,0.04); backdrop-filter: blur(20px);
-                border: 1px solid rgba(255,255,255,0.1); border-radius: 20px;
-                padding: 3rem; max-width: 450px; width: 100%;
-                box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
-            ">
-                <div style="font-size: 3rem; margin-bottom: 1rem;">🔒</div>
-                <h2 style="color: #f87171; margin-top: 0;">Erişim Reddedildi</h2>
-                <p style="color: #c7d2fe; line-height: 1.6;">
-                    ${customMessage || 'Bu uygulamaya erişim yetkiniz bulunmuyor.<br>Yöneticiden yetki talep edebilirsiniz.'}
-                </p>
-                <a href="https://doruklu.com" style="
-                    display: inline-block; margin-top: 1.5rem; padding: 0.8rem 2rem;
-                    background: #6366f1; color: white; text-decoration: none;
-                    border-radius: 12px; font-weight: 600; transition: all 0.3s;
-                ">Merkezi Sisteme Dön</a>
-            </div>
-        </div>
-    `;
 }
 
 /**
- * Tüm oturum verilerini temizler (localStorage, sessionStorage ve Çerezler)
+ * Geriye Dönük Uyumluluk için Wrapper
  */
+export async function initSubdomainAuth(appKey, onSuccess) {
+    return initPlatformAuth({ isHub: false, appKey, onSuccess });
+}
+
+/**
+ * Profil verilerini Auth (Google) ile senkronize tutar
+ */
+async function syncProfileData(user) {
+    const meta = user.user_metadata || {};
+    const googleName = meta.full_name || meta.name || meta.displayName;
+    const googleAvatar = meta.avatar_url || meta.picture;
+
+    // Profili çek
+    let { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+
+    if (!profile) {
+        console.log("[Auth] Yeni profil oluşturuluyor...");
+        const payload = {
+            id: user.id,
+            display_name: googleName || user.email.split('@')[0],
+            email: user.email,
+            avatar_url: googleAvatar,
+            role: 'player',
+            permissions: {}
+        };
+        const { data: newP, error } = await supabase.from('profiles').insert(payload).select().single();
+        if (error) { // Email sütunu yoksa fallback
+            delete payload.email;
+            const { data: fallbackP } = await supabase.from('profiles').insert(payload).select().single();
+            return fallbackP;
+        }
+        return newP;
+    }
+
+    // Mevcut profil senkronizasyonu
+    const needsSync = !profile.email || 
+                     (!profile.display_name && googleName) || 
+                     (googleName && googleName !== profile.display_name && !profile.display_name.includes(user.email.split('@')[0]));
+
+    if (needsSync) {
+        console.log("[Auth] Profil güncelleniyor (Metadata Sync)...");
+        const updatePayload = {
+            email: user.email,
+            display_name: googleName || profile.display_name,
+            avatar_url: googleAvatar || profile.avatar_url
+        };
+        const { data: updatedP, error } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
+        if (error) { // Email sütunu yoksa fallback
+            delete updatePayload.email;
+            const { data: fallbackUP } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
+            return fallbackUP;
+        }
+        return updatedP;
+    }
+
+    return profile;
+}
+
+export async function handleGoogleLogin() {
+    const redirectTo = window.location.origin;
+    await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+            redirectTo: redirectTo
+        }
+    });
+}
+
+export function redirectToLogin() {
+    window.location.href = 'https://doruklu.com/?redirect_to=' + encodeURIComponent(window.location.origin + window.location.pathname);
+}
+
 export async function clearAllCaches() {
     localStorage.clear();
     sessionStorage.clear();
-    
-    // Bütün çerezleri her domain/path varyasyonu için yok et
     document.cookie.split(";").forEach(function(c) { 
         document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
         document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/;domain=.doruklu.com");
     });
+}
+
+function showAccessDenied() {
+    document.body.innerHTML = `
+        <div style="color: white; text-align: center; padding: 80px 20px; font-family: 'Outfit', sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);">
+            <div style="background: rgba(255,255,255,0.04); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 3rem; max-width: 450px; width: 100%; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);">
+                <div style="font-size: 3rem; margin-bottom: 1rem;">🔒</div>
+                <h2 style="color: #f87171; margin-top: 0;">Erişim Reddedildi</h2>
+                <p style="color: #c7d2fe; line-height: 1.6;">Bu uygulamaya erişim yetkiniz bulunmuyor.<br>Yöneticiden yetki talep edebilirsiniz.</p>
+                <a href="https://doruklu.com" style="display: inline-block; margin-top: 1.5rem; padding: 0.8rem 2rem; background: #6366f1; color: white; text-decoration: none; border-radius: 12px; font-weight: 600; transition: all 0.3s;">Merkezi Sisteme Dön</a>
+            </div>
+        </div>`;
 }
