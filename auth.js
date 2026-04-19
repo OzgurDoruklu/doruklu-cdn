@@ -8,8 +8,9 @@
  * 3. sso_token varsa → supabase.auth.setSession() ile manuel session kurar
  * 4. Hiçbiri yoksa → doruklu.com'a redirect (login için)
  */
-import { supabase, AppState } from './supabase-config.js';
+import { supabase, AppState, PLATFORM_VERSION } from './supabase-config.js';
 import { ui } from './ui.js';
+
 
 /**
  * Subdomain uygulamaları için standart SSO auth akışı.
@@ -18,7 +19,19 @@ import { ui } from './ui.js';
  * @param {Function} onSuccess — Başarılı login + yetki sonrası callback: (user, profile) => void
  */
 export async function initSubdomainAuth(appKey, onSuccess) {
+    // 0. Otomatik Versiyon Kontrolü (Cache Busting)
+    const storedVersion = localStorage.getItem('DORUKLU_PLATFORM_VERSION');
+    if (storedVersion !== PLATFORM_VERSION) {
+        console.log(`[Platform] Yeni versiyon tespit edildi (${storedVersion} -> ${PLATFORM_VERSION}). Önbellek temizleniyor...`);
+        localStorage.clear();
+        sessionStorage.clear();
+        localStorage.setItem('DORUKLU_PLATFORM_VERSION', PLATFORM_VERSION);
+        window.location.reload(true);
+        return;
+    }
+
     const spinner = document.getElementById('loading-spinner');
+
     if (spinner) spinner.style.display = 'flex';
 
     let _handled = false;

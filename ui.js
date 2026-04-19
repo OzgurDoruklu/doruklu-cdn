@@ -51,36 +51,42 @@ export const ui = {
      * Tüm subdomain'lerde üstte yer alan logolu header'ı render eder.
      * Logo tıklandığında doruklu.com'a TOKEN RELAY ile gider.
      */
-    renderGlobalHeader: async (title = "") => {
+    renderGlobalHeader: (title = "") => {
         if (document.getElementById('doruklu-global-header')) return;
 
-        const { data: { session } } = await supabase.auth.getSession();
-        let hubUrl = 'https://doruklu.com';
-        
-        if (session) {
-            hubUrl = `https://doruklu.com/?sso_token=${session.access_token}&sso_refresh=${session.refresh_token}`;
-        }
-
+        // Container'ı hemen (senkron) oluşturuyoruz ki renderUserBadge slotu bulabilsin
         const headerHTML = `
             <header id="doruklu-global-header" style="
                 position: fixed; top: 0; left: 0; width: 100%; height: 65px;
                 background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(15px);
                 border-bottom: 1px solid rgba(255,255,255,0.1);
                 display: flex; align-items: center; justify-content: space-between;
-                padding: 0 20px; z-index: 1000; font-family: 'Outfit', sans-serif;
+                padding: 0 24px; z-index: 1000; font-family: 'Outfit', sans-serif;
             ">
-                <a href="${hubUrl}" id="global-logo-link" style="display:flex; align-items:center; gap:12px; text-decoration:none; transition: transform 0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-                    <div style="width: 40px; height: 40px;">${Assets.logoSVG}</div>
-                    <span style="color: white; font-weight: 800; font-size: 1.2rem; letter-spacing: -0.5px;">DORUKLU <span style="color: #6366f1; font-weight: 400;">${title}</span></span>
+                <a href="https://doruklu.com" id="global-logo-link" style="display:flex; align-items:center; gap:12px; text-decoration:none; transition: transform 0.3s;" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+                    <div style="width: 42px; height: 42px; display:flex; align-items:center; justify-content:center;">${Assets.logoSVG}</div>
+                    <span style="color: white; font-weight: 800; font-size: 1.3rem; letter-spacing: -0.5px;">DORUKLU <span style="color: #818cf8; font-weight: 400;">${title}</span></span>
                 </a>
                 <div id="header-right-slot" style="display:flex; align-items:center; gap:15px;">
+                    <!-- User badge buraya gelecek -->
                 </div>
             </header>
         `;
 
         document.body.insertAdjacentHTML('afterbegin', headerHTML);
         ui.syncFavicon();
+
+        // Hub URL'ini (token relay) asenkron olarak arka planda güncelliyoruz
+        (async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session) {
+                const hubUrl = `https://doruklu.com/?sso_token=${session.access_token}&sso_refresh=${session.refresh_token}`;
+                const link = document.getElementById('global-logo-link');
+                if (link) link.href = hubUrl;
+            }
+        })();
     },
+
 
     renderUserBadge: (user, profile, logoutCallback) => {
         if (document.getElementById('doruklu-global-badge')) {
