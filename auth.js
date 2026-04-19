@@ -15,10 +15,11 @@ import { ui } from './ui.js';
 export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess = null } = {}) {
     // 0. Versiyon Kontrolü (Cache Busting)
     const storedVersion = localStorage.getItem('DORUKLU_PLATFORM_VERSION');
-    // ... rest of the logic ... (Veritabanı işlemleri bittikten sonra buraya bakılacak)
+    
+    // URL Parametrelerini al
+    const urlParams = new URLSearchParams(window.location.search);
 
     // Redirect parametresini yakala (Sadece Hub'da)
-    const urlParams = new URLSearchParams(window.location.search);
     const redirectTo = urlParams.get('redirect_to');
     if (isHub && redirectTo) {
         localStorage.setItem('redirect_to', redirectTo);
@@ -95,7 +96,6 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
     }
 
     // SSO Token Yakalama (Query Param - Hem Hub hem Subdomain için aktif)
-    const urlParams = new URLSearchParams(window.location.search);
     const ssoToken = urlParams.get('sso_token');
     const ssoRefresh = urlParams.get('sso_refresh');
 
