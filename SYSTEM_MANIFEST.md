@@ -31,6 +31,8 @@ doruklu.com (SSO Hub)          ← doruklu-main repo
 | `doruklu-ozgur` | ozgur.doruklu.com | ✅ | Özgür'ün kişisel alanı |
 | `doruklu-toprak` | toprak.doruklu.com | ✅ | Bilgi kartı oyunu |
 | `doruklu-nurcan` | nurcan.doruklu.com | ✅ | Nurcan'ın uygulaması |
+| `doruklu-dashboard` | dashboard.doruklu.com | ✅ | Kullanıcı / Sistem istatistik paneli |
+| `doruklu-dashboard-builder` | dashboard-builder.doruklu.com | ✅ | Rapor şablon tasarım aracı |
 
 ## 🔗 CDN Bağımlılık Haritası
 
@@ -75,6 +77,8 @@ Her repo CDN'den neyi kullanıyor:
 | `toprak_game` | toprak.doruklu.com |
 | `ozgur_dashboard` | ozgur.doruklu.com |
 | `nurcan_app` | nurcan.doruklu.com |
+| `doruklu_dashboard` | dashboard.doruklu.com |
+| `doruklu_dashboard_builder` | dashboard-builder.doruklu.com |
 
 ## 🔐 SSO Akışı
 

@@ -119,3 +119,36 @@ CREATE POLICY "Yöneticiler tüm session'ları okuyabilir" ON public.game_sessio
 
 CREATE POLICY "Player yeni session ekleyebilir" ON public.game_sessions
     FOR INSERT WITH CHECK (auth.uid() = player_id);
+
+
+-- =====================
+-- TABLE: reports
+-- =====================
+-- Dashboard Builder tarafından kaydedilen rapor şemaları
+CREATE TABLE IF NOT EXISTS public.reports (
+    id          TEXT PRIMARY KEY,
+    schema      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT timezone('utc', now())
+);
+
+ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
+
+-- Herkes raporları okuyabilir
+CREATE POLICY "Herkes raporları okuyabilir" ON public.reports
+    FOR SELECT USING (true);
+
+-- Sadece yöneticiler rapor ekleyebilir/güncelleyebilir/silebilir
+CREATE POLICY "Yöneticiler rapor ekleyebilir" ON public.reports
+    FOR INSERT WITH CHECK (
+        public.get_auth_role() IN ('admin', 'super_admin')
+    );
+
+CREATE POLICY "Yöneticiler rapor güncelleyebilir" ON public.reports
+    FOR UPDATE USING (
+        public.get_auth_role() IN ('admin', 'super_admin')
+    );
+
+CREATE POLICY "Yöneticiler rapor silebilir" ON public.reports
+    FOR DELETE USING (
+        public.get_auth_role() IN ('admin', 'super_admin')
+    );
