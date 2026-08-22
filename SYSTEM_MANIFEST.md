@@ -1,7 +1,8 @@
 # Doruklu Platform — System Manifest
 
-> **Son güncelleme:** 2026-04-12
+> **Son güncelleme:** 2026-08-22 (güvenlik sertleştirmesi)
 > Bu dosya tüm Doruklu platformunun haritasıdır. Her repo, DB tablosu ve bağımlılık burada izlenir.
+> Ayrıntılı mimari ve risk kaydı çalışma alanındadır: `D:\Github\DORUKLU-PLATFORM.md`, `D:\Github\BULGULAR.md`
 
 ---
 
@@ -11,15 +12,20 @@
 doruklu.com (SSO Hub)          ← doruklu-main repo
     │
     ├── cdn.doruklu.com        ← doruklu-cdn repo (shared assets)
-    │   ├── supabase-config.js   → Supabase client (localStorage)
+    │   ├── supabase-config.js   → Supabase client + PLATFORM_VERSION
     │   ├── auth.js              → Merkezi SSO auth modülü
-    │   ├── ui.js                → Global UI (badge, alerts, spinner)
+    │   ├── util.js              → esc / safeImageUrl / safeRedirect  (güvenlik yardımcıları)
+    │   ├── ui.js                → Global UI (header, badge, alerts, spinner)
+    │   ├── assets.js            → Logo SVG
     │   ├── style.css            → Global CSS
-    │   └── db-schema.sql        → DB şema takip dosyası
+    │   ├── db-schema.sql        → DB şema takip dosyası
+    │   └── migrations/          → Uygulanmış SQL göçleri
     │
     ├── ozgur.doruklu.com      ← doruklu-ozgur repo
     ├── toprak.doruklu.com     ← doruklu-toprak repo
-    └── nurcan.doruklu.com     ← doruklu-nurcan repo
+    ├── nurcan.doruklu.com     ← doruklu-nurcan repo
+    ├── dashboard.doruklu.com  ← doruklu-dashboard repo
+    └── dashboard-builder…     ← doruklu-dashboard-builder repo
 ```
 
 ## 📦 Repolar
@@ -28,47 +34,54 @@ doruklu.com (SSO Hub)          ← doruklu-main repo
 |------|-----|--------------|----------|
 | `doruklu-cdn` | cdn.doruklu.com | ✅ | Paylaşılan JS/CSS/Auth |
 | `doruklu-main` | doruklu.com | ✅ | SSO hub + Admin paneli |
-| `doruklu-ozgur` | ozgur.doruklu.com | ✅ | Özgür'ün kişisel alanı |
+| `doruklu-ozgur` | ozgur.doruklu.com | ✅ | Özgür'ün kişisel alanı (placeholder) |
 | `doruklu-toprak` | toprak.doruklu.com | ✅ | Bilgi kartı oyunu |
-| `doruklu-nurcan` | nurcan.doruklu.com | ✅ | Nurcan'ın uygulaması |
+| `doruklu-nurcan` | nurcan.doruklu.com | ✅ | Nurcan'ın uygulaması (placeholder) |
 | `doruklu-dashboard` | dashboard.doruklu.com | ✅ | Kullanıcı / Sistem istatistik paneli |
 | `doruklu-dashboard-builder` | dashboard-builder.doruklu.com | ✅ | Rapor şablon tasarım aracı |
 
 ## 🔗 CDN Bağımlılık Haritası
 
-Her repo CDN'den neyi kullanıyor:
+| Dosya | main | ozgur | toprak | nurcan | dashboard | builder |
+|-------|------|-------|--------|--------|-----------|---------|
+| `supabase-config.js` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `auth.js` | ✅ (isHub) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `util.js` | ✅ | ❌ | ✅ | ❌ | ✅ | ❌ |
+| `ui.js` | ✅ | ✅ | ✅ (+ kendi) | ✅ | ✅ | ✅ |
+| `style.css` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ (Tailwind) |
 
-| Dosya | main | ozgur | toprak | nurcan |
-|-------|------|-------|--------|--------|
-| `supabase-config.js` | ✅ | ✅ | ✅ | ✅ |
-| `auth.js` | ❌ (kendi) | ✅ | ✅ | ✅ |
-| `ui.js` | ✅ | ✅ | ✅ (+ kendi) | ✅ |
-| `style.css` | ✅ | ✅ | ✅ | ✅ |
-
-> **NOT:** `doruklu-main` kendi auth akışını kullanır (SSO hub olduğu için).  
-> `doruklu-toprak` CDN ui.js + kendi ui.js (oyun-spesifik) kullanır.
+> `doruklu-main` `initPlatformAuth({ isHub: true })` ile aynı modülü kullanır.
+> `doruklu-dashboard-builder` ortak CSS yerine Tailwind kullanır — tek istisna.
 
 ## 🗄️ Veritabanı (Supabase)
 
-**Proje URL:** `https://izwubhjhqbmnxpddjljr.supabase.co`
+**Proje:** `izwubhjhqbmnxpddjljr`
 
-### Tablolar
+| Tablo | Açıklama |
+|-------|----------|
+| `profiles` | Kullanıcı profilleri (role, permissions, total_score) |
+| `flashcards` | Bilgi kartı soruları |
+| `game_sessions` | Oyun oturum kayıtları — trigger ile `total_score`'u işler |
+| `reports` | Dashboard Builder rapor şemaları (`owner_id` ile sahiplik) |
 
-| Tablo | Kolon Sayısı | Açıklama |
-|-------|-------------|----------|
-| `profiles` | 6 | Kullanıcı profilleri (role, permissions, score) |
-| `flashcards` | 6 | Bilgi kartı soruları |
-| `game_sessions` | 9 | Oyun oturum kayıtları |
+**Şema detayı →** [`db-schema.sql`](./db-schema.sql) · **Göçler →** [`migrations/`](./migrations/)
 
-### Şema Detayı → [`db-schema.sql`](./db-schema.sql)
+### Sunucu tarafı fonksiyonlar
+
+| Fonksiyon | Amaç |
+|---|---|
+| `get_auth_role()` | RLS rekürsiyonunu kıran rol okuyucu |
+| `set_user_permission(target_id, perm_key, perm_value)` | **Tek meşru yetki değiştirme kapısı** (super_admin) |
+| `set_user_role(target_id, new_role)` | Rol değiştirme (super_admin, kendi rolü hariç) |
+| `apply_session_score()` | `game_sessions` insert trigger'ı — puanı sunucuda işler |
 
 ### Roller
 
 | Rol | Yetkiler |
 |-----|----------|
-| `super_admin` | Tüm uygulamalar + admin paneli + kullanıcı yönetimi |
-| `admin` | Tüm uygulamalar + admin paneli |
-| `player` | Sadece izin verilen uygulamalar (permissions JSONB) |
+| `super_admin` | Tüm uygulamalar + admin paneli + kullanıcı/rol yönetimi |
+| `admin` | Tüm uygulamalar + kart yönetimi (kullanıcı yönetimi **yok**) |
+| `player` | Sadece `permissions` JSONB'sinde `true` olan uygulamalar |
 
 ### Permissions JSONB Anahtarları
 
@@ -85,24 +98,37 @@ Her repo CDN'den neyi kullanıyor:
 ```
 Subdomain (session yok)
     → redirect: doruklu.com?redirect_to=SUBDOMAIN_URL
-    → doruklu.com: localStorage session var → Google OAuth (yoksa)
-    → redirect: SUBDOMAIN_URL#access_token=...&refresh_token=...
-    → Subdomain: Supabase detectSessionInUrl → localStorage'a kaydeder
-    → Subdomain: Profil sorgusu → yetki kontrolü → uygulama göster
+    → Hub: redirect_to util.js ALLOWED_ORIGINS listesinden geçer (yoksa yok sayılır)
+    → Hub: localStorage session var mı? yoksa → Google OAuth
+    → redirect: SUBDOMAIN_URL#sso_token=...&sso_refresh=...   ← HASH fragment
+    → Subdomain: setSession() → localStorage'a yazar, URL temizlenir
+    → Subdomain: Profil sorgusu → permissions[appKey] → uygulama göster
 ```
 
-## 📋 Kontrol Listesi — DB Değişikliği Yapıldığında
+> Token'lar **hash fragment** ile taşınır; fragment sunucuya gönderilmez, Referer'a düşmez.
+> Query string (`?sso_token=`) yalnızca geriye dönük uyumluluk için **okunur**, asla üretilmez.
+
+## 📋 Kontrol Listesi — CDN Değişikliği
+
+- [ ] `supabase-config.js` içindeki `PLATFORM_VERSION` artırıldı mı?
+- [ ] Tüm `index.html`'lerdeki `?v=` eki senkron mu? (`doruklu.sh version`)
+- [ ] Export imzası değişti mi? → 6 sitenin tamamı etkilenir
+- [ ] Push sonrası 6 subdomain de elle denendi mi?
+
+## 📋 Kontrol Listesi — DB Değişikliği
 
 - [ ] `db-schema.sql` güncellendi mi?
-- [ ] RLS politikaları `super_admin` dahil mi?
-- [ ] JS kodları yeni/silinen kolonları yansıtıyor mu?
-- [ ] Tüm subdomain'ler test edildi mi?
+- [ ] Politika hem `USING` hem `WITH CHECK` alıyor mu?
+- [ ] `anon` rolü bilerek mi dahil? (`USING (true)` anon'u da kapsar)
+- [ ] Client'a kapalı olması gereken sütunlar için `REVOKE` var mı?
+- [ ] Göç dosyası `migrations/` altına yazıldı mı?
 
-## 📋 Kontrol Listesi — Yeni Uygulama Eklendiğinde
+## 📋 Kontrol Listesi — Yeni Uygulama
 
-- [ ] Yeni repo oluşturuldu mu?
-- [ ] CDN auth.js'deki `initSubdomainAuth(appKey)` için yeni appKey belirlendi mi?
-- [ ] `doruklu-main/js/app.js`'deki `apps` dizisine eklendi mi?
-- [ ] `profiles.permissions` JSONB'ye yeni anahtar eklendi mi?
-- [ ] RLS politikaları güncellendi mi?
+- [ ] Repo + `CNAME` dosyası + GoDaddy CNAME kaydı
+- [ ] GitHub Pages açık ve **Enforce HTTPS** işaretli
+- [ ] `util.js` içindeki `ALLOWED_ORIGINS` listesine yeni origin eklendi mi? ← **unutulursa SSO çalışmaz**
+- [ ] `initSubdomainAuth('<yeni_app_key>')` bağlandı mı?
+- [ ] `doruklu-main/js/app.js` → `appGroups` dizisine eklendi mi?
+- [ ] Admin tablosuna yetki toggle sütunu eklendi mi?
 - [ ] Bu manifest güncellendi mi?

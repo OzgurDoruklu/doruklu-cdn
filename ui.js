@@ -1,5 +1,6 @@
 import { Assets } from './assets.js';
 import { supabase } from './supabase-config.js';
+import { esc, safeImageUrl } from './util.js';
 
 export const ui = {
     showScreen: (screenId) => {
@@ -65,7 +66,7 @@ export const ui = {
             ">
                 <a href="https://doruklu.com" id="global-logo-link" style="display:flex; align-items:center; gap:12px; text-decoration:none; transition: transform 0.3s;" onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
                     <div style="width: 42px; height: 42px; display:flex; align-items:center; justify-content:center;">${Assets.logoSVG}</div>
-                    <span style="color: var(--text-main); font-weight: 800; font-size: 1.3rem; letter-spacing: -0.5px;">DORUKLU <span style="color: var(--primary); font-weight: 400;">${title}</span></span>
+                    <span style="color: var(--text-main); font-weight: 800; font-size: 1.3rem; letter-spacing: -0.5px;">DORUKLU <span style="color: var(--primary); font-weight: 400;">${esc(title)}</span></span>
                 </a>
                 <div id="header-right-slot" style="display:flex; align-items:center; gap:15px;">
                     <!-- User badge buraya gelecek -->
@@ -76,17 +77,30 @@ export const ui = {
         document.body.insertAdjacentHTML('afterbegin', headerHTML);
         ui.syncFavicon();
 
-        // Hub URL'ini (token relay) asenkron olarak arka planda güncelliyoruz
+        // Hub'a dönüş: token DOM'da BEKLETİLMEZ, tıklama anında üretilip fragment ile taşınır.
+        // (Eskiden href'e gömülüyordu; sayfa açık kaldığı sürece token DOM'da duruyordu.)
+        const link = document.getElementById('global-logo-link');
+        if (link) {
+            link.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const { data: { session } } = await supabase.auth.getSession();
+                if (session?.access_token) {
+                    const hub = new URL('https://doruklu.com/');
+                    hub.hash = new URLSearchParams({
+                        sso_token: session.access_token,
+                        sso_refresh: session.refresh_token
+                    }).toString();
+                    window.location.href = hub.toString();
+                } else {
+                    window.location.href = 'https://doruklu.com/';
+                }
+            });
+        }
+
+        // Giriş yoksa temayı zorla karanlık yap (User isteği)
         (async () => {
             const { data: { session } } = await supabase.auth.getSession();
-            if (session) {
-                const hubUrl = `https://doruklu.com/?sso_token=${session.access_token}&sso_refresh=${session.refresh_token}`;
-                const link = document.getElementById('global-logo-link');
-                if (link) link.href = hubUrl;
-            } else {
-                // Giriş yoksa temayı zorla karanlık yap (User isteği)
-                document.body.classList.remove('light-mode');
-            }
+            if (!session) document.body.classList.remove('light-mode');
         })();
     },
 
@@ -106,11 +120,14 @@ export const ui = {
         const currentTheme = localStorage.getItem('doruklu-theme') || 'dark';
         if (currentTheme === 'light') document.body.classList.add('light-mode');
 
+        // Avatar URL'i kullanıcı kontrolünde — protokol süzgecinden geçmeden basılmaz
+        const safeAvatar = avatarUrl ? safeImageUrl(avatarUrl) : '';
+
         let avatarHTML = '';
-        if (avatarUrl) {
-            avatarHTML = `<img src="${avatarUrl}" style="width:100%; height:100%; border-radius:50%; object-fit:cover;">`;
+        if (safeAvatar) {
+            avatarHTML = `<img src="${safeAvatar}" alt="" style="width:100%; height:100%; border-radius:50%; object-fit:cover;">`;
         } else {
-            const initial = displayName.charAt(0).toUpperCase();
+            const initial = esc(displayName.charAt(0).toUpperCase());
             avatarHTML = `<div style="width:100%; height:100%; border-radius:50%; background: linear-gradient(135deg, #6366f1, #a855f7); color:white; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:1.2rem;">${initial}</div>`;
         }
 
@@ -120,7 +137,7 @@ export const ui = {
                     <div id="badge-avatar" style="width:32px; height:32px; border-radius:50%; border:2px solid rgba(255,255,255,0.2); overflow:hidden;">
                         ${avatarHTML}
                     </div>
-                    <span style="color:white; font-weight:500; font-size:0.9rem; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${displayName}</span>
+                    <span style="color:white; font-weight:500; font-size:0.9rem; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(displayName)}</span>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
                 </div>
                 
@@ -129,8 +146,8 @@ export const ui = {
                         <div style="width:64px; height:64px; border-radius:50%; border:2px solid var(--primary); overflow:hidden; margin-bottom:12px; padding:2px;">
                             ${avatarHTML}
                         </div>
-                        <div style="font-weight:700; color:var(--text-main); font-size:1.15rem; margin-bottom:4px;">${displayName}</div>
-                        <div style="font-size:0.85rem; color:var(--text-secondary); word-break:break-all;">${email}</div>
+                        <div style="font-weight:700; color:var(--text-main); font-size:1.15rem; margin-bottom:4px;">${esc(displayName)}</div>
+                        <div style="font-size:0.85rem; color:var(--text-secondary); word-break:break-all;">${esc(email)}</div>
                     </div>
 
                     <!-- Theme Toggle Section (Animated Icons) -->

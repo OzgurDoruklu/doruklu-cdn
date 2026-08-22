@@ -1,37 +1,92 @@
 /**
- * Doruklu CDN — Merkezi Auth Modülü (v2.0.0 — Unified)
+ * Doruklu CDN — Merkezi Auth Modülü (v2.1.0 — Güvenlik sertleştirmesi)
  * Tüm platformun (Hub + Subdomainler) SSO ve Profil yönetim kalbi.
+ *
+ * v2.1.0 değişiklikleri:
+ *  - redirect_to artık izin listesinden geçiyor (açık yönlendirme / token hırsızlığı kapatıldı)
+ *  - Token relay query string yerine hash fragment ile yapılıyor (fragment sunucuya gitmez)
+ *  - Sürüm temizliği oturumu ve redirect_to'yu artık silmiyor
  */
 import { supabase, AppState, PLATFORM_VERSION } from './supabase-config.js';
+import { safeRedirect } from './util.js';
 import { ui } from './ui.js';
+
+/** Sürüm temizliğinde korunacak localStorage anahtarları (Supabase oturumu dahil). */
+const PRESERVED_KEYS = /^(sb-|redirect_to$|doruklu-theme$|DORUKLU_PLATFORM_VERSION$)/;
+
+/**
+ * Sürüm atlandığında bayat önbelleği temizler ama oturumu düşürmez.
+ * (Eskiden düz localStorage.clear() çağrılıyordu; her deploy herkesi çıkış yaptırıyordu.)
+ */
+function purgeStaleCache() {
+    const preserved = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && PRESERVED_KEYS.test(k)) preserved.push([k, localStorage.getItem(k)]);
+    }
+    localStorage.clear();
+    sessionStorage.clear();
+    for (const [k, v] of preserved) localStorage.setItem(k, v);
+}
+
+/**
+ * SSO token'larını URL'den okur.
+ * Öncelik hash fragment'te; query string yalnızca geriye dönük uyumluluk için okunuyor
+ * (eski, önbellekten gelen auth.js kopyaları hâlâ query ile relay edebilir).
+ */
+function readSsoTokens(urlParams) {
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    let token = hash.get('sso_token');
+    let refresh = hash.get('sso_refresh');
+
+    if (!token || !refresh) {
+        token = urlParams.get('sso_token');
+        refresh = urlParams.get('sso_refresh');
+    }
+    return (token && refresh) ? { token, refresh } : null;
+}
+
+/** Adres çubuğundan SSO izlerini siler; diğer query parametrelerine dokunmaz. */
+function stripSsoFromUrl() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('sso_token');
+    url.searchParams.delete('sso_refresh');
+    url.hash = '';
+    history.replaceState(null, '', url.pathname + url.search);
+}
 
 /**
  * Merkezi Platform Auth Başlatıcı
- * @param {Object} options 
+ * @param {Object} options
  * @param {boolean} options.isHub - Ana portal (doruklu.com) mu?
  * @param {string} options.appKey - Subdomain için yetki anahtarı (örn: 'toprak_game')
  * @param {Function} options.onSuccess - Başarılı giriş ve yetki sonrası callback: (user, profile) => void
  */
 export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess = null } = {}) {
-    // 0. Versiyon Kontrolü (Cache Busting)
+    // 0. Versiyon Kontrolü (Cache Busting) — redirect_to yazımından ÖNCE çalışmalı
     const storedVersion = localStorage.getItem('DORUKLU_PLATFORM_VERSION');
-    
-    // URL Parametrelerini al
-    const urlParams = new URLSearchParams(window.location.search);
-
-    // Redirect parametresini yakala (Sadece Hub'da)
-    const redirectTo = urlParams.get('redirect_to');
-    if (isHub && redirectTo) {
-        localStorage.setItem('redirect_to', redirectTo);
+    if (storedVersion !== PLATFORM_VERSION) {
+        console.log(`[Platform] Yeni versiyon (${storedVersion} -> ${PLATFORM_VERSION}). Önbellek temizleniyor...`);
+        purgeStaleCache();
+        localStorage.setItem('DORUKLU_PLATFORM_VERSION', PLATFORM_VERSION);
+        window.location.reload();
+        return;
     }
 
-    if (storedVersion !== PLATFORM_VERSION) {
-        console.log(`[Platform] Yeni versiyon tespit edildi (${storedVersion} -> ${PLATFORM_VERSION}). Önbellek temizleniyor...`);
-        localStorage.clear();
-        sessionStorage.clear();
-        localStorage.setItem('DORUKLU_PLATFORM_VERSION', PLATFORM_VERSION);
-        window.location.reload(true);
-        return;
+    const urlParams = new URLSearchParams(window.location.search);
+
+    // Redirect parametresini yakala (Sadece Hub'da) — izin listesinden geçmeyen adres yok sayılır
+    if (isHub) {
+        const requested = urlParams.get('redirect_to');
+        if (requested) {
+            const safe = safeRedirect(requested);
+            if (safe) {
+                localStorage.setItem('redirect_to', safe.toString());
+            } else {
+                console.warn('[Auth] redirect_to izin listesinde değil, yok sayıldı:', requested);
+                localStorage.removeItem('redirect_to');
+            }
+        }
     }
 
     // Google Login butonu varsa otomatik bağla
@@ -61,14 +116,22 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
             const storedRedirect = localStorage.getItem('redirect_to');
             if (storedRedirect) {
                 localStorage.removeItem('redirect_to');
-                // Token'ları URL'e ekleyip subdomain'e fırlat
-                if (session && session.access_token) {
-                    const url = new URL(storedRedirect);
-                    url.searchParams.set('sso_token', session.access_token);
-                    url.searchParams.set('sso_refresh', session.refresh_token);
-                    window.location.href = url.toString();
+
+                // localStorage'daki değer de yeniden doğrulanıyor (eski/bozuk kayıtlara karşı)
+                const target = safeRedirect(storedRedirect);
+                if (target && session.access_token) {
+                    // Token'lar HASH FRAGMENT ile taşınıyor: fragment sunucuya gönderilmez,
+                    // Referer başlığına ve sunucu loglarına düşmez.
+                    target.hash = new URLSearchParams({
+                        sso_token: session.access_token,
+                        sso_refresh: session.refresh_token
+                    }).toString();
+
+                    // replace(): token'lı URL hub'ın geri tuşu geçmişinde kalmasın
+                    window.location.replace(target.toString());
                     return; // Relayed!
                 }
+                if (!target) console.warn('[Auth] Kayıtlı redirect_to güvenli değil, relay iptal edildi.');
             }
         }
 
@@ -84,26 +147,24 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
             }
         }
 
-        // 3. Ortak UI Render (Global Badge)
+        // 4. Ortak UI Render (Global Badge)
         ui.renderUserBadge(user, AppState.profile, async () => {
             await clearAllCaches();
             await supabase.auth.signOut();
             window.location.href = 'https://doruklu.com/?logout=true';
         });
 
-        // 4. Başarı Callback
+        // 5. Başarı Callback
         if (onSuccess) onSuccess(user, AppState.profile);
     }
 
-    // SSO Token Yakalama (Query Param - Hem Hub hem Subdomain için aktif)
-    const ssoToken = urlParams.get('sso_token');
-    const ssoRefresh = urlParams.get('sso_refresh');
-
-    if (ssoToken && ssoRefresh) {
-        history.replaceState(null, '', window.location.origin + window.location.pathname);
-        const { data, error } = await supabase.auth.setSession({
-            access_token: ssoToken,
-            refresh_token: ssoRefresh
+    // SSO Token Yakalama (hash öncelikli, query geriye dönük uyumluluk için)
+    const sso = readSsoTokens(urlParams);
+    if (sso) {
+        stripSsoFromUrl();
+        const { data } = await supabase.auth.setSession({
+            access_token: sso.token,
+            refresh_token: sso.refresh
         });
         if (data?.session) {
             await handleSession(data.session);
@@ -136,7 +197,10 @@ export async function initSubdomainAuth(appKey, onSuccess) {
 }
 
 /**
- * Profil verilerini Auth (Google) ile senkronize tutar
+ * Profil verilerini Auth (Google) ile senkronize tutar.
+ *
+ * NOT: role / permissions / total_score bu akışta BİLEREK yazılmaz.
+ * Bu sütunlar DB tarafında client'a kapalıdır (bkz. migrations/2026-08-22-security.sql).
  */
 async function syncProfileData(user) {
     const meta = user.user_metadata || {};
@@ -148,13 +212,12 @@ async function syncProfileData(user) {
 
     if (!profile) {
         console.log("[Auth] Yeni profil oluşturuluyor...");
+        // role ve permissions gönderilmiyor — DB varsayılanları ('player', '{}') geçerli
         const payload = {
             id: user.id,
             display_name: googleName || user.email.split('@')[0],
             email: user.email,
-            avatar_url: googleAvatar,
-            role: 'player',
-            permissions: {}
+            avatar_url: googleAvatar
         };
         const { data: newP, error } = await supabase.from('profiles').insert(payload).select().single();
         if (error) { // Email sütunu yoksa fallback
@@ -166,8 +229,8 @@ async function syncProfileData(user) {
     }
 
     // Mevcut profil senkronizasyonu
-    const needsSync = !profile.email || 
-                     (!profile.display_name && googleName) || 
+    const needsSync = !profile.email ||
+                     (!profile.display_name && googleName) ||
                      (googleName && googleName !== profile.display_name && !profile.display_name.includes(user.email.split('@')[0]));
 
     if (needsSync) {
@@ -178,11 +241,11 @@ async function syncProfileData(user) {
             avatar_url: googleAvatar || profile.avatar_url
         };
         const { data: updatedP, error: err1 } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
-        if (err1) { 
+        if (err1) {
             console.warn("[Auth] Email ile güncelleme başarısız, email'siz deneniyor...");
             delete updatePayload.email;
             const { data: updatedP2, error: err2 } = await supabase.from('profiles').update(updatePayload).eq('id', user.id).select().single();
-            
+
             if (err2) {
                 console.warn("[Auth] Profil senkronize edilemedi (Muhtemelen RLS yetki hatası), mevcut verilerle devam ediliyor:", err2.message);
                 return profile; // Hata durumunda eldeki mevcut profili koru!
@@ -212,8 +275,8 @@ export function redirectToLogin() {
 export async function clearAllCaches() {
     localStorage.clear();
     sessionStorage.clear();
-    document.cookie.split(";").forEach(function(c) { 
-        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+    document.cookie.split(";").forEach(function(c) {
+        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
         document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/;domain=.doruklu.com");
     });
 }
