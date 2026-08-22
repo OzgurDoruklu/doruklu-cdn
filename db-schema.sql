@@ -6,8 +6,12 @@
 -- Her DB değişikliğinde bu dosya da güncellenmelidir.
 --
 -- Uygulanan göçler:
---   migrations/2026-08-22-security.sql          → K-01, K-05, K-06, K-08, K-09
---   migrations/2026-08-22b-yetki-sikilastirma.sql → tablo yetkileri asgariye indirildi
+--   migrations/2026-08-22-security.sql            → K-01, K-05, K-06, K-08, K-09
+--   migrations/2026-08-22b-yetki-sikilastirma.sql → tablo yetkileri asgariye indirildi (K-11)
+--   migrations/2026-08-22c-insert-sutun-kisiti.sql → profiles INSERT sütun düzeyine indirildi (K-12)
+--
+-- ⚠️ Bir sütunu client'tan korurken INSERT ve UPDATE'in İKİSİ de kapatılmalı.
+-- Yalnızca UPDATE'i kapatmak, satırı ilk kez oluşturan kullanıcı için hiçbir şey ifade etmez.
 --
 -- YETKİ İLKESİ: `anon` hiçbir tabloya erişemez. `authenticated` yalnızca uygulamanın
 -- gerçekten kullandığı fiillere sahiptir; TRUNCATE / TRIGGER / REFERENCES hiçbir tabloda yoktur.
@@ -59,9 +63,13 @@ CREATE POLICY "Herkes kendi profilini görebilir" ON public.profiles
 CREATE POLICY "Yöneticiler tüm profilleri görebilir" ON public.profiles
     FOR SELECT USING (public.get_auth_role() IN ('admin', 'super_admin'));
 
--- Oluşturma (ilk giriş)
-CREATE POLICY "Kullanıcılar kendi profilini oluşturabilir" ON public.profiles
-    FOR INSERT WITH CHECK (auth.uid() = id);
+-- Oluşturma (ilk giriş) — politika yalnızca kimliği doğrular.
+-- role/permissions/total_score'u koruyan şey aşağıdaki SÜTUN grant'idir, bu politika değil.
+CREATE POLICY "Kullanici kendi profilini olusturur" ON public.profiles
+    FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
+
+REVOKE INSERT ON public.profiles FROM authenticated;
+GRANT  INSERT (id, display_name, email, avatar_url) ON public.profiles TO authenticated;
 
 -- Güncelleme — role / permissions / total_score DEĞİŞTİRİLEMEZ
 CREATE POLICY "Kullanici kendi profilini gunceller" ON public.profiles
