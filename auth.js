@@ -12,7 +12,7 @@ import { safeRedirect } from './util.js';
 import { ui } from './ui.js';
 
 /** Sürüm temizliğinde korunacak localStorage anahtarları (Supabase oturumu dahil). */
-const PRESERVED_KEYS = /^(sb-|redirect_to$|doruklu-theme$|doruklu_session_at$|DORUKLU_PLATFORM_VERSION$)/;
+const PRESERVED_KEYS = /^(sb-|redirect_to$|doruklu-theme$|DORUKLU_PLATFORM_VERSION$)/;
 
 /**
  * PLATFORM GENELİNDE ÇIKIŞ
@@ -26,8 +26,7 @@ const PRESERVED_KEYS = /^(sb-|redirect_to$|doruklu-theme$|doruklu_session_at$|DO
  * çerezi bırakılıyor; her origin açılışta kendi oturum damgasıyla karşılaştırıp
  * daha eskiyse oturumu düşürüyor.
  */
-const LOGOUT_COOKIE     = 'doruklu_logout_at';
-const SESSION_STAMP_KEY = 'doruklu_session_at';
+const LOGOUT_COOKIE = 'doruklu_logout_at';
 
 function readLogoutStamp() {
     const m = document.cookie.match(/(?:^|;\s*)doruklu_logout_at=(\d+)/);
@@ -39,12 +38,39 @@ function markGlobalLogout() {
     document.cookie = `${LOGOUT_COOKIE}=${Date.now()};path=/;domain=.doruklu.com;max-age=604800;SameSite=Lax;Secure`;
 }
 
-/** Bu origin'deki oturum, platform genelindeki çıkıştan daha mı eski? */
-function isGloballyLoggedOut() {
-    const logoutAt  = readLogoutStamp();
+/**
+ * Oturumun access token'ının ne zaman verildiği (JWT `iat` iddiası, ms).
+ * Çözülemezse 0 döner.
+ */
+function sessionIssuedAt(session) {
+    try {
+        const b64 = session.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')));
+        return typeof payload.iat === 'number' ? payload.iat * 1000 : 0;
+    } catch {
+        return 0;
+    }
+}
+
+/**
+ * Bu oturum, platform genelindeki çıkıştan daha mı eski?
+ *
+ * ⚠️ Kıyas ölçütü token'ın KENDİ `iat` iddiasıdır, localStorage değil.
+ * Önceki sürüm `localStorage.doruklu_session_at` ile karşılaştırıyordu — ama çıkış
+ * localStorage'ı da siliyor, dolayısıyla Google'dan yeni dönen taze oturum bile
+ * sessionAt=0 görüp bayat sayılıyor ve kurulur kurulmaz düşürülüyordu. Sonuç:
+ * giriş sonsuz döngüye giriyordu. Token'ın iat'ı bu tuzağa düşmez.
+ *
+ * Çözülemeyen token'da FAIL OPEN: çıkışın yayılmaması, girişin tamamen kırılmasından iyidir.
+ */
+function isStaleSession(session) {
+    const logoutAt = readLogoutStamp();
     if (!logoutAt) return false;
-    const sessionAt = Number(localStorage.getItem(SESSION_STAMP_KEY) || 0);
-    return logoutAt > sessionAt;
+
+    const issuedAt = sessionIssuedAt(session);
+    if (!issuedAt) return false;   // fail open
+
+    return logoutAt > issuedAt;
 }
 
 /**
@@ -116,8 +142,15 @@ function stripSsoFromUrl() {
  */
 export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess = null } = {}) {
     // 0. Versiyon Kontrolü (Cache Busting) — redirect_to yazımından ÖNCE çalışmalı
+    //
+    // OAuth dönüşü sırasında ASLA çalıştırma: Supabase, #access_token=... fragment'ini
+    // asenkron işliyor (detectSessionInUrl). Ortasında reload() çağırmak fragment'i
+    // götürür ve oturum hiç kurulamaz — kullanıcı giriş yapar yapmaz çıkmış olur.
+    // Sürüm temizliği bir sonraki açılışa ertelenir.
+    const oauthDonusu = /[#&](access_token|error|error_description)=/.test(window.location.hash);
+
     const storedVersion = localStorage.getItem('DORUKLU_PLATFORM_VERSION');
-    if (storedVersion !== PLATFORM_VERSION) {
+    if (!oauthDonusu && storedVersion !== PLATFORM_VERSION) {
         console.log(`[Platform] Yeni versiyon (${storedVersion} -> ${PLATFORM_VERSION}). Önbellek temizleniyor...`);
         purgeStaleCache();
         localStorage.setItem('DORUKLU_PLATFORM_VERSION', PLATFORM_VERSION);
@@ -199,11 +232,7 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
             }
         }
 
-        // 4. Bu origin'deki oturumun ne zaman kurulduğunu işaretle.
-        //    Platform genelindeki çıkış damgasıyla karşılaştırılıyor (bkz. isGloballyLoggedOut).
-        localStorage.setItem(SESSION_STAMP_KEY, String(Date.now()));
-
-        // 5. Başarı Callback — rozetten ÖNCE çalışmalı.
+        // 4. Başarı Callback — rozetten ÖNCE çalışmalı.
         //    Hub'ın header'ını (#header-right-slot) yaratan şey bu callback; rozet önce
         //    render edilirse slot'u bulamayıp document.body'nin sonuna düşüyordu.
         if (onSuccess) {
@@ -215,7 +244,7 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
             }
         }
 
-        // 6. Ortak UI Render (Global Badge) — artık header mevcut
+        // 5. Ortak UI Render (Global Badge) — artık header mevcut
         ui.renderUserBadge(user, AppState.profile, performGlobalLogout);
     }
 
@@ -236,16 +265,16 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
     // Mevcut Session Kontrolü
     let { data: { session } } = await supabase.auth.getSession();
 
-    // Bu origin'deki oturum, platform genelindeki çıkıştan eskiyse düşür.
-    // (Relay ile yeni gelen token bu kontrole TAKILMAZ — yukarıda handleSession'a girip döndü.)
-    if (session && isGloballyLoggedOut()) {
+    // Oturum, platform genelindeki çıkıştan ESKİYSE düşür.
+    // Taze giriş (Google'dan yeni dönen ya da relay ile gelen) token'ın iat'ı
+    // çıkış damgasından yeni olduğu için bu kontrole takılmaz.
+    if (session && isStaleSession(session)) {
         console.log('[Auth] Platform genelinde çıkış yapılmış, bu origin\'deki bayat oturum düşürülüyor.');
         try {
             await supabase.auth.signOut({ scope: 'local' });
         } catch (err) {
             console.warn('[Auth] Yerel signOut hatası:', err);
         }
-        localStorage.removeItem(SESSION_STAMP_KEY);
         session = null;
     }
 
