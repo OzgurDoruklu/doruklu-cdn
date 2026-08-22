@@ -35,4 +35,4 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
 });
 
 export const AppState = { user: null, profile: null };
-export const PLATFORM_VERSION = '2026.08.22.3'; // Deploy sonrası bunu artırın
+export const PLATFORM_VERSION = '2026.08.22.4'; // Deploy sonrası bunu artırın

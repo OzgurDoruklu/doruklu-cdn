@@ -26,16 +26,24 @@ const PRESERVED_KEYS = /^(sb-|redirect_to$|doruklu-theme$|DORUKLU_PLATFORM_VERSI
  * çerezi bırakılıyor; her origin açılışta kendi oturum damgasıyla karşılaştırıp
  * daha eskiyse oturumu düşürüyor.
  */
-const LOGOUT_COOKIE = 'doruklu_logout_at';
+const LOGOUT_COOKIE  = 'doruklu_logout_at';
+const CLOCK_SKEW_SEC = 120;
 
+/**
+ * Damga biçimi: `s<saniye>` veya `c<saniye>`
+ *   s → değer SUNUCU saatinden (çıkış anındaki token'ın `iat`'ı) → birebir karşılaştırılır
+ *   c → değer İSTEMCİ saatinden (oturum okunamadı) → saat farkı payı bırakılır
+ *
+ * Biçime uymayan değerler (eski salt-rakam sürümü dahil) yok sayılır: fail open.
+ */
 function readLogoutStamp() {
-    const m = document.cookie.match(/(?:^|;\s*)doruklu_logout_at=(\d+)/);
-    return m ? Number(m[1]) : 0;
+    const m = document.cookie.match(/(?:^|;\s*)doruklu_logout_at=([sc]\d+)/);
+    return m ? m[1] : '';
 }
 
 /** Çıkış damgasını bırakır. clearAllCaches çerezleri sildiği için ONDAN SONRA çağrılmalı. */
-function markGlobalLogout() {
-    document.cookie = `${LOGOUT_COOKIE}=${Date.now()};path=/;domain=.doruklu.com;max-age=604800;SameSite=Lax;Secure`;
+function markGlobalLogout(stamp) {
+    document.cookie = `${LOGOUT_COOKIE}=${stamp};path=/;domain=.doruklu.com;max-age=604800;SameSite=Lax;Secure`;
 }
 
 /**
@@ -64,13 +72,23 @@ function sessionIssuedAt(session) {
  * Çözülemeyen token'da FAIL OPEN: çıkışın yayılmaması, girişin tamamen kırılmasından iyidir.
  */
 function isStaleSession(session) {
-    const logoutAt = readLogoutStamp();
-    if (!logoutAt) return false;
+    const raw = readLogoutStamp();
+    if (!/^[sc]\d+$/.test(raw)) return false;   // damga yok / tanınmayan biçim → fail open
 
-    const issuedAt = sessionIssuedAt(session);
-    if (!issuedAt) return false;   // fail open
+    const stampSec = Number(raw.slice(1));
+    if (!stampSec) return false;
 
-    return logoutAt > issuedAt;
+    const issuedMs = sessionIssuedAt(session);
+    if (!issuedMs) return false;                // token çözülemedi → fail open
+    const issuedSec = Math.floor(issuedMs / 1000);
+
+    if (raw[0] === 's') {
+        // Damga da token da SUNUCU saatinden → birebir karşılaştırılabilir.
+        // `<=` bilinçli: relay'de subdomain hub'la AYNI token'ı taşıyor, o da düşmeli.
+        return issuedSec <= stampSec;
+    }
+    // Damga istemci saatinden; sunucuyla farkı olabilir → pay bırak.
+    return (stampSec - issuedSec) > CLOCK_SKEW_SEC;
 }
 
 /**
@@ -81,6 +99,18 @@ function isStaleSession(session) {
  * sunucudaki refresh token'lar iptal edilmiyordu.
  */
 export async function performGlobalLogout() {
+    // Damgayı signOut'tan ÖNCE üret: ölçüt olarak mevcut token'ın `iat`'ı kullanılıyor.
+    // Böylece damga da karşılaştırılacak token'lar da AYNI saatten (Supabase sunucusu) geliyor;
+    // tarayıcı saatiyle sunucu saati arasındaki fark denklemden tamamen çıkıyor.
+    let stamp = '';
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const iatMs = session ? sessionIssuedAt(session) : 0;
+        if (iatMs) stamp = 's' + Math.floor(iatMs / 1000);
+    } catch { /* aşağıdaki yedeğe düşer */ }
+
+    if (!stamp) stamp = 'c' + Math.floor(Date.now() / 1000);   // yedek: istemci saati
+
     try {
         // Varsayılan kapsam 'global': kullanıcının TÜM refresh token'larını sunucuda iptal eder
         await supabase.auth.signOut();
@@ -88,7 +118,7 @@ export async function performGlobalLogout() {
         console.warn('[Auth] signOut sunucuya ulaşamadı, yerel temizlikle devam ediliyor:', err);
     }
     await clearAllCaches();
-    markGlobalLogout();   // clearAllCaches'ten SONRA — o çerezleri siliyor
+    markGlobalLogout(stamp);   // clearAllCaches'ten SONRA — o çerezleri siliyor
     window.location.href = 'https://doruklu.com/?logout=true';
 }
 
@@ -262,8 +292,33 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
         }
     }
 
+    // OAuth dönüşünde YARIŞ VAR: Supabase `#access_token=...` fragment'ini asenkron işliyor;
+    // getSession() bundan önce dönerse null görürüz, auth ekranını basarız ve oturum
+    // saniyeler sonra sessizce kurulur — kullanıcı "başarılı dönüp giriş ekranında kalır".
+    // Çözüm: oturum ne zaman gelirse gelsin yakalayan bir dinleyici. _handled ikilemeyi önlüyor.
+    supabase.auth.onAuthStateChange((event, s) => {
+        if (s && !_handled && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
+            if (isStaleSession(s)) return;
+            handleSession(s);
+        }
+    });
+
     // Mevcut Session Kontrolü
     let { data: { session } } = await supabase.auth.getSession();
+
+    // OAuth dönüşünde oturum henüz yazılmamış olabilir — kısa bir pencere tanı.
+    // (Yalnızca fragment gerçekten OAuth dönüşüyken; normal açılışı yavaşlatmıyor.)
+    if (!session && oauthDonusu) {
+        for (let i = 0; i < 12 && !session && !_handled; i++) {
+            await new Promise(r => setTimeout(r, 250));
+            ({ data: { session } } = await supabase.auth.getSession());
+        }
+        if (!session && !_handled) {
+            console.warn('[Auth] OAuth dönüşü algılandı ama oturum kurulamadı.');
+        }
+    }
+
+    if (_handled) return;   // dinleyici bizden önce davrandıysa iş bitti
 
     // Oturum, platform genelindeki çıkıştan ESKİYSE düşür.
     // Taze giriş (Google'dan yeni dönen ya da relay ile gelen) token'ın iat'ı
