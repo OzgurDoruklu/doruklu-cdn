@@ -12,7 +12,59 @@ import { safeRedirect } from './util.js';
 import { ui } from './ui.js';
 
 /** Sürüm temizliğinde korunacak localStorage anahtarları (Supabase oturumu dahil). */
-const PRESERVED_KEYS = /^(sb-|redirect_to$|doruklu-theme$|DORUKLU_PLATFORM_VERSION$)/;
+const PRESERVED_KEYS = /^(sb-|redirect_to$|doruklu-theme$|doruklu_session_at$|DORUKLU_PLATFORM_VERSION$)/;
+
+/**
+ * PLATFORM GENELİNDE ÇIKIŞ
+ *
+ * localStorage origin başına ayrıdır: hub'da çıkış yapmak nurcan.doruklu.com'un
+ * oturumunu silmez. Access token'ı süresi dolana kadar geçerli kaldığı için
+ * subdomain "hiç çıkış yapılmamış" gibi davranıyordu; oradan hub'a dönen relay de
+ * çıkışı tamamen geri alıyordu.
+ *
+ * Çözüm: çerezler *.doruklu.com genelinde paylaşılır. Çıkışta bir zaman damgası
+ * çerezi bırakılıyor; her origin açılışta kendi oturum damgasıyla karşılaştırıp
+ * daha eskiyse oturumu düşürüyor.
+ */
+const LOGOUT_COOKIE     = 'doruklu_logout_at';
+const SESSION_STAMP_KEY = 'doruklu_session_at';
+
+function readLogoutStamp() {
+    const m = document.cookie.match(/(?:^|;\s*)doruklu_logout_at=(\d+)/);
+    return m ? Number(m[1]) : 0;
+}
+
+/** Çıkış damgasını bırakır. clearAllCaches çerezleri sildiği için ONDAN SONRA çağrılmalı. */
+function markGlobalLogout() {
+    document.cookie = `${LOGOUT_COOKIE}=${Date.now()};path=/;domain=.doruklu.com;max-age=604800;SameSite=Lax;Secure`;
+}
+
+/** Bu origin'deki oturum, platform genelindeki çıkıştan daha mı eski? */
+function isGloballyLoggedOut() {
+    const logoutAt  = readLogoutStamp();
+    if (!logoutAt) return false;
+    const sessionAt = Number(localStorage.getItem(SESSION_STAMP_KEY) || 0);
+    return logoutAt > sessionAt;
+}
+
+/**
+ * Tüm platformdan çıkış. Rozetteki "Oturumu Kapat" bunu çağırır.
+ *
+ * SIRA ÖNEMLİ: signOut() ÖNCE gelmeli. Eskiden clearAllCaches() önce çalışıyor,
+ * Supabase oturumunu siliyordu; signOut() elinde token olmadan çağrıldığı için
+ * sunucudaki refresh token'lar iptal edilmiyordu.
+ */
+export async function performGlobalLogout() {
+    try {
+        // Varsayılan kapsam 'global': kullanıcının TÜM refresh token'larını sunucuda iptal eder
+        await supabase.auth.signOut();
+    } catch (err) {
+        console.warn('[Auth] signOut sunucuya ulaşamadı, yerel temizlikle devam ediliyor:', err);
+    }
+    await clearAllCaches();
+    markGlobalLogout();   // clearAllCaches'ten SONRA — o çerezleri siliyor
+    window.location.href = 'https://doruklu.com/?logout=true';
+}
 
 /**
  * Sürüm atlandığında bayat önbelleği temizler ama oturumu düşürmez.
@@ -147,15 +199,24 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
             }
         }
 
-        // 4. Ortak UI Render (Global Badge)
-        ui.renderUserBadge(user, AppState.profile, async () => {
-            await clearAllCaches();
-            await supabase.auth.signOut();
-            window.location.href = 'https://doruklu.com/?logout=true';
-        });
+        // 4. Bu origin'deki oturumun ne zaman kurulduğunu işaretle.
+        //    Platform genelindeki çıkış damgasıyla karşılaştırılıyor (bkz. isGloballyLoggedOut).
+        localStorage.setItem(SESSION_STAMP_KEY, String(Date.now()));
 
-        // 5. Başarı Callback
-        if (onSuccess) onSuccess(user, AppState.profile);
+        // 5. Başarı Callback — rozetten ÖNCE çalışmalı.
+        //    Hub'ın header'ını (#header-right-slot) yaratan şey bu callback; rozet önce
+        //    render edilirse slot'u bulamayıp document.body'nin sonuna düşüyordu.
+        if (onSuccess) {
+            try {
+                onSuccess(user, AppState.profile);
+            } catch (err) {
+                // onSuccess patlasa bile rozet render edilmeli — yoksa çıkış yapmak imkânsız kalır
+                console.error('[Auth] onSuccess hata verdi:', err);
+            }
+        }
+
+        // 6. Ortak UI Render (Global Badge) — artık header mevcut
+        ui.renderUserBadge(user, AppState.profile, performGlobalLogout);
     }
 
     // SSO Token Yakalama (hash öncelikli, query geriye dönük uyumluluk için)
@@ -173,7 +234,21 @@ export async function initPlatformAuth({ isHub = false, appKey = null, onSuccess
     }
 
     // Mevcut Session Kontrolü
-    const { data: { session } } = await supabase.auth.getSession();
+    let { data: { session } } = await supabase.auth.getSession();
+
+    // Bu origin'deki oturum, platform genelindeki çıkıştan eskiyse düşür.
+    // (Relay ile yeni gelen token bu kontrole TAKILMAZ — yukarıda handleSession'a girip döndü.)
+    if (session && isGloballyLoggedOut()) {
+        console.log('[Auth] Platform genelinde çıkış yapılmış, bu origin\'deki bayat oturum düşürülüyor.');
+        try {
+            await supabase.auth.signOut({ scope: 'local' });
+        } catch (err) {
+            console.warn('[Auth] Yerel signOut hatası:', err);
+        }
+        localStorage.removeItem(SESSION_STAMP_KEY);
+        session = null;
+    }
+
     if (session) {
         await handleSession(session);
     } else {
@@ -275,7 +350,11 @@ export function redirectToLogin() {
 export async function clearAllCaches() {
     localStorage.clear();
     sessionStorage.clear();
+    // doruklu_logout_at korunuyor — çıkış damgası burada silinirse subdomain'ler haberdar olmaz.
+    // (performGlobalLogout damgayı bundan sonra yeniden yazıyor; bu koruma doğrudan
+    //  clearAllCaches çağıran diğer yollar için.)
     document.cookie.split(";").forEach(function(c) {
+        if (c.replace(/^ +/, "").startsWith(LOGOUT_COOKIE + "=")) return;
         document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
         document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/;domain=.doruklu.com");
     });

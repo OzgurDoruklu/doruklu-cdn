@@ -108,6 +108,23 @@ Subdomain (session yok)
 > Token'lar **hash fragment** ile taşınır; fragment sunucuya gönderilmez, Referer'a düşmez.
 > Query string (`?sso_token=`) yalnızca geriye dönük uyumluluk için **okunur**, asla üretilmez.
 
+## 🚪 Çıkış Akışı (platform geneli)
+
+```
+Rozet → "Oturumu Kapat" → performGlobalLogout()
+    1. supabase.auth.signOut()          ← ÖNCE. scope:'global', refresh token'ları sunucuda iptal eder
+    2. clearAllCaches()                 ← localStorage + çerezler (logout damgası HARİÇ)
+    3. doruklu_logout_at=<now> çerezi   ← .doruklu.com alanına, tüm subdomain'ler görür
+    4. doruklu.com/?logout=true
+```
+
+Her origin açılışta `doruklu_logout_at` çerezini kendi `localStorage.doruklu_session_at`
+değeriyle karşılaştırır; damga daha yeniyse bayat oturumu düşürür.
+
+> ⚠️ `doruklu_logout_at` çerezi silinirse çıkış subdomain'lere ulaşmaz. `clearAllCaches()` ve
+> `supabase-config.js`'deki `?logout=true` temizliği bu çerezi bilerek atlıyor — dokunma.
+> `localStorage` origin başına ayrı olduğu için çıkışı yayacak başka bir kanal yok.
+
 ## 📋 Kontrol Listesi — CDN Değişikliği
 
 - [ ] `supabase-config.js` içindeki `PLATFORM_VERSION` artırıldı mı?

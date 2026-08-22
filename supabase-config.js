@@ -4,9 +4,13 @@ if (window.location.search.includes('logout=true') || window.location.search.inc
     localStorage.clear();
     sessionStorage.clear();
     
-    // Bütün çerezleri her domain/path varyasyonu için yok et
-    document.cookie.split(";").forEach(function(c) { 
-        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+    // Bütün çerezleri her domain/path varyasyonu için yok et.
+    // TEK İSTİSNA: doruklu_logout_at — platform genelindeki çıkış damgası.
+    // Bu çerez silinirse subdomain'ler çıkış yapıldığını hiç öğrenemez ve
+    // bayat oturumlarıyla açılmaya devam eder (auth.js → isGloballyLoggedOut).
+    document.cookie.split(";").forEach(function(c) {
+        if (c.replace(/^ +/, "").startsWith("doruklu_logout_at=")) return;
+        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
         document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/;domain=.doruklu.com");
     });
 
@@ -31,4 +35,4 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
 });
 
 export const AppState = { user: null, profile: null };
-export const PLATFORM_VERSION = '2026.08.22.1'; // Deploy sonrası bunu artırın
+export const PLATFORM_VERSION = '2026.08.22.2'; // Deploy sonrası bunu artırın
