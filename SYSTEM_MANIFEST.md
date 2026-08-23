@@ -39,6 +39,7 @@ doruklu.com (SSO Hub)          ← doruklu-main repo
 | `doruklu-nurcan` | nurcan.doruklu.com | ✅ | Nurcan'ın uygulaması (placeholder) |
 | `doruklu-dashboard` | dashboard.doruklu.com | ✅ | Kullanıcı / Sistem istatistik paneli |
 | `doruklu-dashboard-builder` | dashboard-builder.doruklu.com | ✅ | Rapor şablon tasarım aracı |
+| `doruklu-boboraktv` | boboraktv.doruklu.com | ✅ | **Platform dışı** — Boborak TV web yüzü, ayrı Supabase projesi. CDN’den yalnızca `style.css` alır |
 
 ## 🔗 CDN Bağımlılık Haritası
 
@@ -116,12 +117,20 @@ Subdomain (session yok)
 Rozet → "Oturumu Kapat" → performGlobalLogout()
     1. supabase.auth.signOut()          ← ÖNCE. scope:'global', refresh token'ları sunucuda iptal eder
     2. clearAllCaches()                 ← localStorage + çerezler (logout damgası HARİÇ)
-    3. doruklu_logout_at=<now> çerezi   ← .doruklu.com alanına, tüm subdomain'ler görür
+    3. doruklu_logout_at=s<saniye> çerezi ← .doruklu.com alanına, tüm subdomain'ler görür
     4. doruklu.com/?logout=true
 ```
 
-Her origin açılışta `doruklu_logout_at` çerezini kendi `localStorage.doruklu_session_at`
-değeriyle karşılaştırır; damga daha yeniyse bayat oturumu düşürür.
+Damga, **çıkış anındaki token'ın JWT `iat` iddiasından** üretilir (`s<saniye>`). Her origin
+açılışta kendi oturumunun `iat`'ıyla karşılaştırır; `tokenIat <= damga` ise bayat oturumu düşürür.
+
+> ⚠️ **Damga `localStorage`'a YAZILMAZ.** İlk sürüm öyleydi ve girişi tamamen kırdı: çıkış
+> `localStorage`'ı da sildiği için taze oturum `0` ile kıyaslanıp anında öldürülüyordu (R-01).
+> Ölçüt, oturumun kendi içinde olmalı.
+>
+> ⚠️ **İki farklı saat karşılaştırılmaz.** Damga da token da Supabase sunucusunun saatinden
+> gelir. Oturum okunamazsa `c<saniye>` (istemci saati) yedeğine düşülür ve 120 sn pay bırakılır.
+> Tanınmayan biçimdeki damgalar yok sayılır — fail open (R-02).
 
 > ⚠️ `doruklu_logout_at` çerezi silinirse çıkış subdomain'lere ulaşmaz. `clearAllCaches()` ve
 > `supabase-config.js`'deki `?logout=true` temizliği bu çerezi bilerek atlıyor — dokunma.
@@ -149,6 +158,13 @@ değeriyle karşılaştırır; damga daha yeniyse bayat oturumu düşürür.
 - [ ] Göç dosyası `migrations/` altına yazıldı mı?
 
 ## 📋 Kontrol Listesi — Yeni Uygulama
+
+**Önce şunu cevapla: uygulama bu platformun Supabase projesini mi kullanacak?**
+
+Hayırsa (kendi projesi varsa) aşağıdaki `ALLOWED_ORIGINS` / `appKey` / `appGroups` adımları
+**uygulanmaz** — `cdn.doruklu.com/auth.js` ve `ui.js` de import edilmez. Yalnızca `style.css`
+ortak olabilir. Örnek: `doruklu-boboraktv`. Yanlış projede oturum açan kullanıcı kendi
+verisini göremez ve hata mesajı almaz.
 
 - [ ] Repo + `CNAME` dosyası + GoDaddy CNAME kaydı
 - [ ] GitHub Pages açık ve **Enforce HTTPS** işaretli
