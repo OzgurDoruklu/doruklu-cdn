@@ -74,6 +74,8 @@ doruklu.com (SSO Hub)          ← doruklu-main repo
 | `set_user_permission(target_id, perm_key, perm_value)` | **Tek meşru yetki değiştirme kapısı** (super_admin) |
 | `set_user_role(target_id, new_role)` | Rol değiştirme (super_admin, kendi rolü hariç) |
 | `apply_session_score()` | `game_sessions` insert trigger'ı — puanı sunucuda işler |
+| `check_flashcard_answer(kart_id, cevap)` | **Cevap doğrulama.** Yalnızca boolean döner; `correct_answer` client'a hiç inmez |
+| `admin_list_flashcards()` | Yönetici kart listesi (cevaplar dahil). admin/super_admin kontrolü sunucuda |
 
 ### Roller
 
@@ -138,6 +140,12 @@ değeriyle karşılaştırır; damga daha yeniyse bayat oturumu düşürür.
 - [ ] Politika hem `USING` hem `WITH CHECK` alıyor mu?
 - [ ] `anon` rolü bilerek mi dahil? (`USING (true)` anon'u da kapsar)
 - [ ] Client'a kapalı olması gereken sütunlar için `REVOKE` var mı?
+      (Sıra zorunlu: önce tablo düzeyi yetkiyi al, sonra serbest sütunları `GRANT` et.
+       Tablo yetkisi dururken sütun düzeyinde `REVOKE` **etkisizdir**.
+       INSERT ve UPDATE'in **ikisi de** kapatılmalı — yalnızca UPDATE, satırı ilk kez
+       oluşturan kullanıcı için hiçbir şey ifade etmez.)
+- [ ] Sütun kısıtlanan tabloda istemci `select('*')` yapıyor mu? Yıldız genişlemesi
+      yetkisiz sütuna denk gelip sorguyu düşürür — açık sütun listesi yaz.
 - [ ] Göç dosyası `migrations/` altına yazıldı mı?
 
 ## 📋 Kontrol Listesi — Yeni Uygulama

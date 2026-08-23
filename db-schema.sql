@@ -9,6 +9,8 @@
 --   migrations/2026-08-22-security.sql            → K-01, K-05, K-06, K-08, K-09
 --   migrations/2026-08-22b-yetki-sikilastirma.sql → tablo yetkileri asgariye indirildi (K-11)
 --   migrations/2026-08-22c-insert-sutun-kisiti.sql → profiles INSERT sütun düzeyine indirildi (K-12)
+--   migrations/2026-08-22d-cevap-dogrulama-rpc.sql → cevap doğrulama RPC'leri (K-05)
+--   migrations/2026-08-22e-cevap-gizle.sql         → correct_answer client'a kapatıldı (K-05)
 --
 -- ⚠️ Bir sütunu client'tan korurken INSERT ve UPDATE'in İKİSİ de kapatılmalı.
 -- Yalnızca UPDATE'i kapatmak, satırı ilk kez oluşturan kullanıcı için hiçbir şey ifade etmez.
@@ -132,6 +134,25 @@ CREATE POLICY "Yoneticiler kart siler" ON public.flashcards
     FOR DELETE TO authenticated USING (public.get_auth_role() IN ('admin','super_admin'));
 
 REVOKE ALL ON public.flashcards FROM anon;
+
+-- correct_answer client'a KAPALI (K-05). Tablo düzeyi SELECT alınıp yalnızca
+-- oyunun ihtiyaç duyduğu sütunlar geri verildi. INSERT/UPDATE/DELETE tablo
+-- düzeyinde kalıyor — RLS zaten admin/super_admin ile sınırlıyor ve yönetici
+-- cevap yazabilmek zorunda.
+REVOKE SELECT ON public.flashcards FROM authenticated;
+GRANT  SELECT (id, question_type, content, options, created_at)
+       ON public.flashcards TO authenticated;
+
+-- Cevap doğrulama ve yönetici okuması bu iki kapıdan geçiyor:
+--   public.check_flashcard_answer(p_card_id UUID, p_answer JSONB) → BOOLEAN
+--       Yalnızca doğru/yanlış döner; cevap hiçbir koşulda dışarı çıkmaz.
+--   public.admin_list_flashcards() → SETOF flashcards
+--       admin/super_admin kontrolü sunucuda. `authenticated` tek bir Postgres
+--       rolü olduğu için sütun yetkisi admin'i oyuncudan ayıramıyor.
+-- Detay: migrations/2026-08-22d-cevap-dogrulama-rpc.sql
+--
+-- ⚠️ Bu tabloya yeni bir istemci sorgusu yazarken `select('*')` KULLANMA —
+--    yıldız genişlemesi correct_answer'a denk gelip sorguyu düşürür.
 
 -- ⚠️ AÇIK KALAN: correct_answer hâlâ client'a iniyor (game.js select('*')).
 -- Kapatmak için correct_answer'sız bir view + cevap doğrulayan bir RPC gerekiyor.
