@@ -25,7 +25,8 @@ doruklu.com (SSO Hub)          ← doruklu-main repo
     ├── toprak.doruklu.com     ← doruklu-toprak repo
     ├── nurcan.doruklu.com     ← doruklu-nurcan repo
     ├── dashboard.doruklu.com  ← doruklu-dashboard repo
-    └── dashboard-builder…     ← doruklu-dashboard-builder repo
+    ├── dashboard-builder…     ← doruklu-dashboard-builder repo
+    └── drument.doruklu.com    ← doruklu-drument repo (platform dışı, SSO yok)
 ```
 
 ## 📦 Repolar
@@ -40,6 +41,7 @@ doruklu.com (SSO Hub)          ← doruklu-main repo
 | `doruklu-dashboard` | dashboard.doruklu.com | ✅ | Kullanıcı / Sistem istatistik paneli |
 | `doruklu-dashboard-builder` | dashboard-builder.doruklu.com | ✅ | Rapor şablon tasarım aracı |
 | `doruklu-boboraktv` | boboraktv.doruklu.com | ✅ | **Platform dışı** — Boborak TV web yüzü, ayrı Supabase projesi. CDN’den yalnızca `style.css` alır |
+| `doruklu-drument` | drument.doruklu.com | ✅ | **Platform dışı** — Alesis Nitro davul öğrenme ortamı. SSO yok, Supabase yok, CDN bağımlılığı yok (tamamen kendi içinde). `ALLOWED_ORIGINS`'e **eklenmedi** — token almasına gerek yok |
 
 ## 🔗 CDN Bağımlılık Haritası
 
